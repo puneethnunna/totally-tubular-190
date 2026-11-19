@@ -1,0 +1,1 @@
+export function createBot(id, alliance, diff) { let t = Math.random() * 9; return { think(sim, m, dt) { t += dt; return { moveX: Math.cos(t * 0.5), moveZ: Math.sin(t * 0.4), rotate: 0.2, intake: true }; } }; }

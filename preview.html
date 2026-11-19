@@ -1,0 +1,65 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Render preview</title>
+<style>html,body{margin:0;height:100%;background:#111;overflow:hidden}canvas{width:100%;height:100%;display:block}
+#ui{position:fixed;top:8px;left:8px;display:flex;gap:6px}button{padding:6px 10px;font:13px sans-serif}</style>
+<script type="importmap">{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}</script></head>
+<body><canvas id="c"></canvas>
+<div id="ui"></div>
+<script type="module">
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { createRenderer } from './js/renderer.js';
+import { ROBOT_PRESETS, SIDES, TUBE } from './js/config.js';
+
+const r = createRenderer(document.getElementById('c'));
+window.addEventListener('resize', () => r.resize());
+r.setCameraMode('free');
+r.camera.position.set(-10, 9, 9);
+const controls = new OrbitControls(r.camera, r.canvas);
+controls.target.set(0, 0, 0); controls.update();
+
+const P = (id) => ROBOT_PRESETS.find((p) => p.id === id);
+const tiers = ['stow', 'lower', 'upper', 'floor'];
+const mk = (id, alliance, slot, number, preset, x, z, heading, extra = {}) => ({
+  id, alliance, slot, number, preset: P(preset), x, z, y: 0, heading, vx: 0, vz: 0, omega: 0, held: [], action: null,
+  arm: 0, armTier: 'stow', support: 0, intakeOn: false, contacts: [], ...extra });
+const robots = [
+  mk('blue-0', 'blue', 0, '1678', 'stacker', 5, -2, Math.PI, { arm: 1, armTier: 'upper', held: ['h0', 'h1'] }),
+  mk('blue-1', 'blue', 1, '254', 'tosser', 3, 0.5, Math.PI, { action: { type: 'launch', t: 0, duration: 1 }, held: ['h2'] }),
+  mk('blue-2', 'blue', 2, '971', 'climber', 0.5, -3.3, Math.PI / 2, { support: 3, y: 0.4, armTier: 'lower', arm: 0.6 }),
+  mk('red-0', 'red', 0, '2910', 'sweeper', -3, 1, 0, { intakeOn: true }),
+  mk('red-1', 'red', 1, '118', 'stacker', -5, 2, 0.5, { armTier: 'lower', arm: 0.8, held: ['h3'] }),
+  mk('red-2', 'red', 2, '1323', 'climber', -2, -1, 2.5),
+];
+const tubes = []; let id = 0;
+const T = (o) => tubes.push({ id: 't' + id++, origin: 'blue', vx: 0, vy: 0, vz: 0, holder: null, post: null, stackIndex: 0, placedInAuto: false, state: 'floor', y: TUBE.tubeRadius, ...o });
+for (let i = 0; i < 8; i++) { T({ x: -0.29, z: SIDES.blue.stagingRow[i].z }); T({ x: 0.29, z: -SIDES.blue.stagingRow[i].z }); }
+for (let i = 0; i < 6; i++) T({ x: 7.6, z: -3 + i * 0.7 });                 // in blue floor area
+for (const [i, h] of ['h0', 'h1', 'h2', 'h3'].entries()) T({ id: h, state: 'held', holder: ['blue-0', 'blue-0', 'blue-1', 'red-1'][i], x: 0, z: 0 });
+for (const p of [...SIDES.blue.posts, ...SIDES.red.posts]) if (p.index % 3 === 0)
+  for (let k = 0; k < 3; k++) T({ state: 'post', post: p.id, stackIndex: k, x: p.baseX + p.dirX * (0.1 + 0.12 * k), y: p.y, z: p.z });
+T({ state: 'flight', x: 1, y: 1.8, z: 0.5, vx: -4, vy: 0, vz: 0 });
+for (const a of ['blue', 'red']) for (const c of SIDES[a].chutes) T({ state: 'chute', x: c.x - c.dirX * 0.3 + c.dirZ * 0.3, y: 0.35, z: c.z - c.dirZ * 0.3 + c.dirX * 0.3 });
+const sim = { state: { time: 0, robots, tubes, posts: [], reserve: { blue: 50, red: 50 } } };
+
+const ui = document.getElementById('ui');
+for (const [label, fn] of [
+  ['orbit', () => r.setCameraMode('free')],
+  ['driver blue', () => r.setCameraMode('driver', 'blue')], ['driver red', () => r.setCameraMode('driver', 'red')],
+  ['chase', () => r.setCameraMode('chase', 'blue', 'blue-0')], ['top', () => r.setCameraMode('top', 'blue')],
+  ['low q', () => r.setQuality('low')], ['high q', () => r.setQuality('high')],
+]) { const b = document.createElement('button'); b.textContent = label; b.onclick = fn; ui.append(b); }
+
+function loop(ms) {
+  requestAnimationFrame(loop);
+  sim.state.time = ms / 1000;
+  robots[3].x = -3 + Math.sin(ms / 1500); robots[4].heading = 0.5 + Math.sin(ms / 1000) * 0.3;
+  robots[0].armTier = tiers[Math.floor(ms / 2500) % 4]; robots[0].arm = robots[0].armTier === 'upper' ? 1 : 0.5;
+  controls.enabled = true;
+  r.render(sim);
+}
+requestAnimationFrame(loop);
+window.__preview = { r, sim };
+</script></body></html>

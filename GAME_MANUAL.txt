@@ -1,0 +1,282 @@
+TOTALLY TUBULAR
+A mock FIRST Robotics Competition game manual  Unless otherwise specified, robot construction, event, and inspection and eligibility rules from the 2026 REBUILT season shall be invoked 
+WORKING DRAFT 0.10  •  26 October 2026
+For a three-robot-alliance engineering design kickoff exercise. Not an official FIRST publication.
+
+
+
+
+1  Game at a glance
+Two ALLIANCES of three ROBOTS each score identical inflatable TUBES on floor scoring areas and on two tiers of eight posts, while attempting to finish on progressively elevated endgame platforms. Alliances may earn additional RANKING POINTS by filling posts and by earning sufficient platform points. Each alliance has 108 allocated TUBES, including midfield staging and ROBOT preloads.
+Phase
+Duration
+Principal restrictions
+AUTO
+20 seconds
+No HUMAN PLAYER tube introduction; no ROBOT entry into either LOADING ZONE or the opposing alliances SCORING ZONE. Contact with robots of the opposing alliance is illegal only once the offending robot has fully crossed center field
+TELEOP
+105 seconds 
+Loading permitted; possession and protected-zone rules apply
+ENDGAME
+30 seconds
+See G108, R108, R109, and R110 
+Assessment
+3 seconds after match end
+Platform positions assessed at T+3 seconds
+
+
+
+2  Arena and setup
+2.1  Field arrangement
+ 
+The field is diagonally symmetric. Each alliance has three adjacent DRIVER STATIONS. Each alliance’s SCORING ZONE is in front of the opposing alliance’s DRIVER STATIONS. Each alliance’s LOADING ZONE is adjacent to its own DRIVER STATIONS. A short wall separates each LOADING ZONE from the opposing alliance’s SCORING ZONE. Refer to official field CAD for exact boundaries.
+2.2  Scoring structure 
+Each alliance has 16 individual scoring POSTS: eight LOWER POSTS and eight UPPER POSTS. Each POST may contribute at most three TUBES to the score. A floor-level LEVEL 1 SCORING AREA lies beneath the elevated posts and has no scoring capacity limit. Physical post spacing, height, and the precise definition of a supported tube are found in the field CAD.
+2.3  Game-piece allocation and staging 
+There are 216 generic TUBES in the match, allocated 108 to each alliance. Before a match, each alliance may stage 0–8 of its allocated TUBES within its own designated eight-position midfield staging row in any arrangement. Each staged TUBE must be fully supported by, and directly contacting the FIELD. Each ROBOT may start with no more than one preloaded TUBE. All remaining tubes from the alliance’s 108-piece allocation are staged behind its own LOADING ZONE. Thus, LOADING-STATION RESERVE = 108 − MIDFIELD TUBES − ROBOT PRELOADS. For eight midfield tubes and three preloads, the reserve is 97.
+2.4  Loading station 
+Each loading station has three pre-staging bays where TUBES may be stood on edge, with their central holes facing the FIELD, up to two tubes deep. A chute below the pre-staging area may introduce TUBES directly onto the FIELD. HUMAN PLAYERS may not introduce tubes during AUTO. HUMAN PLAYERS may not reach into the loading chute by any amount. The chute is deliberately shorter than a game piece such that a human player may hold a tube while it is in the chute 
+
+
+2.5  Platforms
+
+
+Each alliance has four endgame levels. LEVEL 1 is carpet at field elevation bounded by tape. LEVELS 2, 3, and 4 are flat raised platforms of strictly increasing height with a top layer of orange peel HDPE. Platform dimensions, heights, and physical adjacency are found in the field CAD.
+3  Scoring
+Scoring action
+TELEOP points
+AUTO points
+TUBE fully scored in LEVEL 1 floor area
+1
+2
+TUBE scored on LOWER POST
+2
+4
+TUBE scored on UPPER POST
+3
+6
+ROBOT on PLATFORM LEVEL 1
+4
+End-of-match only
+ROBOT on PLATFORM LEVEL 2
+6
+End-of-match only
+ROBOT on PLATFORM LEVEL 3
+10
+End-of-match only
+ROBOT on PLATFORM LEVEL 4
+15
+End-of-match only
+FOUL
+4
+4
+TECH FOUL
+10
+10
+3.1  Tube scoring
+A TUBE scores for its alliance when it satisfies the applicable scoring criteria. A floor TUBE must be fully contained within the LEVEL 1 SCORING AREA at assessment. A post TUBE must be supported by a post. LEVEL 2 TUBES may also be contacting TUBES scored on LEVEL 1. No more than three TUBES per POST contribute points; additional tubes do not score. Tubes placed during AUTO earn twice their standard point value. The number of scored TUBES and their locations will be tabulated at the end of AUTO and at the end of TELEOP. The final number of TELEOP TUBES scored per level will be the total number of TUBES scored per level minus the number of TUBES scored in AUTO per level. Rank points are assessed exclusively by the configuration of tubes at the end of the MATCH. 
+3.2  Ranking points
+Condition
+RP
+Match win
+3
+Match tie
+1
+At least 8 of the alliance’s 16 POSTS each have 3 scored TUBES
+1
+At least 12 of the alliance’s 16 POSTS each have 3 scored TUBES
+1 additional
+At least 16 alliance PLATFORM points at end-of-match assessment
+1
+Post thresholds are cumulative: achieving 12 completed posts earns both post-based RPs. Post-completion RPs are based on fully loaded posts, not total number of elevated tubes. The endgame RP is based on the sum of the alliance’s qualifying ROBOT platform points. Losses receive zero result RPs.].
+3.3  End-of-match assessment
+At exactly 3 seconds after the official end of the match, referees assess platform scoring. Multiple ROBOTS may qualify on one platform. A ROBOT must be fully supported by the platform corresponding to its claimed LEVEL, with no support from a lower-level platform or field carpet except as explicitly allowed for LEVEL 1 and their BUMPERS must be completely above the top plane of the claimed LEVEL. Each ROBOT receives points only for its highest qualifying level. Whether incidental contact with another ROBOT causes all contacting ROBOTS to be assessed at the lowest LEVEL of any of the contacting ROBOTS. ROBOTS must be supported exclusively by the top surface of the claimed LEVEL; non supporting contact with lower LEVELS or parts of the FIELD may be disregarded at the discretion of the HEAD REFEREE. ROBOTS may be supported by a LEVEL transitively. 
+4  Gameplay rules
+G101  Two-TUBE CONTROL limit
+A ROBOT may not CONTROL more than 2 TUBES simultaneously. Momentary, incidental CONTROL of an additional TUBE is permitted only if the ROBOT does not use it for strategic advantage and immediately releases or ceases CONTROL of the additional TUBE. Incidental touching or brushing of scored or unscored TUBES in a SCORING ZONE, while controlling two TUBES, is not by itself a violation. Deliberately acquiring, manipulating, trapping, directing, or otherwise CONTROLLING a third TUBE is a violation even if that TUBE is already scored. A deliberate third-TUBE action is not excused as momentary CONTROL.
+Violation: FOUL per occurrence; escalation for repeated or strategic violations is a YELLOW CARD.
+G102  No deliberate de-scoring
+A ROBOT may not intentionally remove or cause the removal of an opponent TUBE that would otherwise remain SCORED. For the floor zone, this prohibition applies only to a TUBE fully contained within the opponent’s LEVEL 1 SCORING AREA immediately before the interference. A floor TUBE that is not fully contained in that area is not protected by this specific rule. A POST TUBE is protected when it satisfies the scoring criteria for that POST. An offense is assed for each affected TUBE. G102 shall not be invoked if a ROBOT is forced to de-score opponent TUBES by an opponent ROBOT. 
+Violation: First offense by a TEAM: VERBAL WARNING. Second offense by the same TEAM: YELLOW CARD or RED CARD at the discretion of the HEAD REFEREE. 
+G103  Protected SCORING ZONES
+A ROBOT with any part of itself in their opponent’s SCORING ZONE may not contact an opponent ROBOT, regardless of who initiates contact.
+Violation: TECH FOUL 
+G104  Protected LOADING ZONES
+A ROBOT with any part of itself in their opponent’s LOADING ZONE may not contact an opponent ROBOT, regardless of who initiates contact. No ROBOT may enter either LOADING ZONE during AUTO.
+Violation: TECH FOUL 
+ 
+G105  No loading during AUTO
+HUMAN PLAYERS may not introduce any TUBE onto the FIELD during AUTO. ROBOTS may not enter either LOADING ZONE during AUTO.
+Violation: First offense by a TEAM: VERBAL WARNING. Second offense by the same TEAM: YELLOW CARD or RED CARD at the discretion of the HEAD REFEREE.
+G106  Launching
+A ROBOT may throw or launch TUBES when fully within its alliance SCORING ZONE. Launching outside permitted scoring areas, unsafe trajectories, and deliberate field damage remain subject to general safety rules.
+Violation: TECH FOUL
+G107  Preloads
+At match start, each ROBOT may contain at most one preloaded TUBE. Preloads count against the alliance’s allocation of 108 TUBES and against the two-TUBE CONTROL limit.
+Violation: Setup correction before match
+
+
+G108  Endgame
+In the last 30 seconds of TELEOP ROBOTS may not contact opponent ROBOTS that are contacting any part of their alliances PLATFORM ZONE or PLATFORMS. Any such contact automatically awards the affected ROBOT a LEVEL 4 score regardless of final ROBOT position
+Violation: FOUL
+G109  Auto
+ROBOTS must start AUTO with their bumpers fully contained within the SCORING ZONE and fully outside of the LEVEL 1 SCORING AREA
+Violation: Setup correction before match 
+G110  Auto
+ROBOTS may not make contact with opponent ROBOTS during AUTO if they have fully crossed mid-field.
+Violation: TECH FOUL
+ G111  Foul Escalation
+ROBOTS awarded a FOUL or TECH FOUL have 3 seconds to rectify the violation by ceasing the offending action or creating at least 6 feet of space between themselves and the victim of their FOUL in the case of ROBOT contact FOULS. Should this not be accomplished, an additional violation of the same level shall be applied by a REFEREE and the timer restarted. ROBOTS perceived to be making a good faith effort to rectify the violation will not be awarded additional penalties. 
+ 
+5  ROBOT Construction Rules
+5  ROBOT Construction Rules
+TOTALLY TUBULAR | Draft 0.10 | Design-exercise rules
+This appendix supersedes Section 5 wherever a more specific rule appears. It adapts the 2026 FIRST Robotics Competition REBUILT robot-construction framework. All descriptions are original summaries for this mock exercise, not a verbatim reproduction. The official 2026 manual remains the source for detailed approved-component lists, tolerances, and diagrams. Where TOTALLY TUBULAR overrides a rule, the override below governs.
+5.1 Rule precedence and modifications
+
+Topic
+TOTALLY TUBULAR requirement
+ROBOT PERIMETER
+120.0 in maximum in starting configuration 
+STARTING HEIGHT
+No game-specific maximum starting height; physical field and safety constraints still apply .
+HORIZONTAL EXTENSION
+20.0 in maximum beyond the vertical projection of the ROBOT PERIMETER, measured perpendicular to the perimeter side.
+EXTENSION DIRECTION
+Only one side/direction beyond ROBOT PERIMETER at a time
+VERTICAL EXTENSION
+No game-specific vertical extension maximum.
+WEIGHT
+115.0 lb maximum excluding bumpers and battery.
+BUMPERS + ROBOT
+135.0 lb combined limit as in 2026 R408, excluding battery.
+MOTORS
+No more than 18 non-servo electric motors installed on the ROBOT. Servos excluded from count, but must otherwise be legal.
+SAFETY / ELECTRICAL / CONTROL
+2026 baseline provisions apply unless directly overridden in this appendix.
+5.2 General ROBOT design
+R101  Fixed ROBOT PERIMETER
+The ROBOT PERIMETER is established by fixed, non-articulated structure in the BUMPER ZONE while in STARTING CONFIGURATION. Minor fastener protrusions of no more than 0.25 in are excluded. The perimeter may be evaluated by pulling a taut string around the outermost fixed chassis features.
+R102  Starting configuration contained
+In STARTING CONFIGURATION, mechanisms must remain within the vertical projection of the ROBOT PERIMETER, except BUMPERS and permitted minor protrusions.
+R103  ROBOT weight
+The ROBOT may weigh no more than 115.0 lb, excluding BUMPERS, the main ROBOT battery and its specified associated connector assembly, and event-supplied tracking tags.
+R104  Starting size
+The ROBOT PERIMETER must be no greater than 120.0 in. There is no game-specific maximum starting height. The ROBOT must be capable of safe field entry, transport, and operation.
+R105  20-inch horizontal extension
+No part of the ROBOT may extend more than 20.0 in horizontally beyond the vertical projection of its ROBOT PERIMETER during a MATCH. BUMPERS and minor excluded protrusions are treated as in the 2026 baseline.
+BLUE BOX — Measure from the original fixed ROBOT PERIMETER, not from the outer surface of BUMPERS. A 20.0-in extension is legal; a 20.5-in extension is not.
+R106  One extension direction at a time
+A ROBOT may extend outside its ROBOT PERIMETER on no more than one side at a time. The extension must remain inside the outward projection of that side. Momentary, inconsequential flex or loose wiring not used for advantage is excepted.
+R107  No vertical extension limit
+There is no TOTALLY TUBULAR-specific maximum ROBOT height during play. Extensions remain subject to safety, field boundary, field damage, and other gameplay restrictions.
+R108  Do not lift BUMPERS out of their zone
+ROBOT mechanisms must not intentionally interact with the carpet or platforms so that BUMPERS leave their required BUMPER ZONE during ordinary navigation. This rule does not apply during ENDGAME
+R109  No more than 4 Drive motors
+ROBOTS can only use a maximum of 4 motors to move the ROBOT across the CARPET. This rule does not apply in ENDGAME while a ROBOT is contacting any part of its PLATFORM ZONE.
+R110  Extend at the End
+In ENDGAME and when at least partially within the PLATFORM ZONE or in direct contact with a PLATFORM ROBOTS may extend in multiple directions at once and the extension limit is raised to 30 inches past the FRAME PERIMETER
+
+5.3 Safety, materials, fabrication and identification
+R201  No hazardous design
+Designs must avoid sharp exposed edges, unsafe projectiles, uncontrolled mechanisms, hazardous energy storage and materials that could injure participants or damage the field.
+R202  Legal materials and components
+Use ordinary legal commercial or custom fabricated parts; apply the 2026 material restrictions for hazardous chemicals, prohibited substances, pneumatics, and other regulated components.
+R203  No contamination
+ROBOTS may not deposit fluids, lubricants, loose materials, or debris on the FIELD in normal operation.
+R204  Team identification
+The ROBOT must display the team number and alliance identification using the 2026 bumper marking framework.
+R205  Mechanisms must be retained
+Parts must be attached securely; no intentional shedding of components or deliberate separation of mechanisms unless an express gameplay rule permits it.
+5.4 BUMPER rules
+R401  Bumper coverage
+Protect the ROBOT PERIMETER with BUMPERS using the 2026 coverage and corner-gap allowances. Retain the 2026 minimum corner protection requirements.
+R402  Construction
+Use the 2026 required padding, backing, cloth cover, and robust rigid attachment framework. Padding must be at least 2.25 in deep and 4.5 in tall, subject to approved material details in the source manual.
+R403  Maximum bumper projection
+BUMPERS may project no more than 4.0 in outward from the ROBOT PERIMETER.
+R404  Hard-part projection
+Hard BUMPER elements may project no more than 1.25 in beyond the ROBOT PERIMETER; at least 2.0 in of padding must extend beyond hard parts.
+R405  Bumper zone
+BUMPERS must occupy the required zone from 2.5 to 5.75 in above the surface being navigated in ordinary driving configurations.
+R406  Filled corners
+BUMPER corners require continuous, uncompressed protective padding consistent with the 2026 construction figures.
+R407  No wedge profiles
+BUMPER shape and padding must not function as a wedge against other ROBOTS.
+R408  Combined weight
+ROBOT plus BUMPERS must not exceed 135.0 lb, excluding the ROBOT battery, pending organizer approval of this baseline adoption.
+R409  Passive bumpers
+BUMPERS must remain fixed to the ROBOT PERIMETER and contain no moving or electrical elements.
+R410  Removable bumpers
+BUMPERS must be removable for inspection and weighing.
+R411  Alliance colors
+ROBOTS must be able to display clearly red or blue BUMPER covers as assigned.
+R412  Team numbers
+Display contrasting team numbers on BUMPERS consistent with the 2026 manual.
+5.5 Motors, power and electrical system
+R501  Motor count
+At most 18 installed electric motors may be used, excluding servos. Each independent motor counts once, including motors in multi-motor assemblies. Servos must still comply with applicable actuator and electrical rules.
+R502  Motor legality
+Only motor models permitted by the 2026 FRC motor rules may be used, unless specifically authorized by the exercise organizer. Preserve manufacturer ratings and permitted controller combinations.
+R601  Battery
+Use the standard legal 12-V FRC ROBOT battery architecture and 2026 battery wiring requirements.
+R602  Main power protection
+Use a legal main breaker, properly rated wiring, distribution devices and overcurrent protection. Follow 2026 power-distribution and wire-gauge requirements.
+R603  Electrical isolation
+Protect wires against abrasion and strain; maintain safe connections and required electrical isolation from the ROBOT frame.
+R701  Pneumatics
+If pneumatics are used, follow 2026 legal compressor, storage, relief, regulation, pressure-rating, tubing, and inspection provisions.
+R801  Control system
+Use the 2026 legal ROBOT controller, radio, motor controllers, software and emergency-stop architecture, unless the organizer expressly authorizes a design-only substitute.
+R802  Wireless and communications
+Follow the 2026 wireless, radio configuration, network and field communication restrictions.
+R803  Fail-safe behavior
+Loss of field enable or communication must disable powered mechanisms safely, consistent with the 2026 control-system requirements.
+5.6 Inspection and gameplay enforcement
+[EDITOR REVIEW — Define how design-only submissions demonstrate compliance and which calculations, drawings, and bills of materials are required.]
+I101  Design review
+Each student design must demonstrate compliance with the 120-in perimeter, 20-in extension, 115-lb weight, 18-motor limit, bumper design and power/control rules. Evidence may be CAD, calculations, schematics, or a bill of materials.
+G413  Expansion enforcement
+During play, ROBOTS may not exceed the R105 20-in horizontal extension restriction or the R106 one-direction restriction. The 2026 vertical-height violation does not apply. Apply the 2026 expansion-rule approach to incidental damage and momentary flex, but not to intentional strategic overextension.
+I102  Design-exercise assumptions
+Where a physical test cannot be performed, the team must document how its proposed implementation would comply. Organizer review is not a waiver of a specified rule.
+5.7 Figures
+Figure H-1 — Top-down robot perimeter, 120-in maximum perimeter measurement
+
+Figure H-2 — 20-in horizontal extension: legal and illegal cases, one-side-only rule
+Figure H-3 — Bumper coverage and corners, source 2026 Figures 8-4 and 8-10
+
+ Figure H-4 — Bumper section and height, source 2026 Figures 8-5 through 8-9
+ 	
+5.8 Source and editorial notes
+Official reference: 2026 REBUILT Game Manual, Section 8 ROBOT Construction Rules and Section 9 Inspection & Eligibility Rules. https://firstfrc.blob.core.windows.net/frc2026/Manual/HTML/2026GameManual.htm
+The 2026 manual contains additional detailed provisions and enumerated approved-part lists not reproduced here. For an entirely self-contained enforceable rulebook, these must be incorporated through organizer-authored rules or a specific, version-controlled incorporation-by-reference statement. The source document and any team updates should be checked before final publication.
+6  Referee interpretation examples
+Situation
+Interpretation
+ROBOT carrying 2 TUBES brushes an already-scored TUBE while turning
+No G101 violation absent CONTROL; check G102 only if deliberately de-scoring
+ROBOT carrying 2 TUBES intentionally pushes a third TUBE toward a post
+G101 violation, including inside SCORING ZONE
+ROBOT accidentally contacts a loose third TUBE and immediately disengages
+Momentary incidental exception may apply
+ROBOT deliberately removes a fully scored opponent floor TUBE
+G102 card offense
+ROBOT pushes a floor TUBE that extends outside LEVEL 1 SCORING AREA
+Not a G102 de-scoring offense on that basis alone; other rules still apply
+Alliance has 11 fully loaded posts and 35 other elevated tubes
+Earns first post RP only; second requires 12 fully loaded posts
+Two robots on LEVEL 3 and one on LEVEL 1
+24 platform points; earns platform RP if each is fully supported
+Appendix A  Example allocation and score
+Allocation example: 108 per alliance = 8 midfield + 3 preloaded + 97 loading-station reserve. Score example: 10 LOWER post tubes (20 points), 8 UPPER post tubes (24 points), 12 floor tubes (12 points), plus platform placements LEVEL 3 + LEVEL 2 + LEVEL 1 (10 + 6 + 4 = 20 points), total 76 points before AUTO bonuses. No post RP is earned unless at least 8 posts have three tubes each; platform RP is earned because 20 ≥ 16.
+Appendix B  Source framework and precedence
+Reference framework: FIRST Robotics Competition 2011 LOGO MOTION (tube placement); 2019 DESTINATION: DEEP SPACE (flat endgame platforms); 2022 RAPID REACT (momentary possession, platform-like scoring values and RP threshold inspiration); 2023 CHARGED UP (COMMUNITY and LOADING ZONE protection); 2026 FRC competition manual (robot construction baseline). These are design references, not incorporated wholesale without an exact frozen edition and rule crosswalk.
+Precedence for the exercise: (1) this mock-game manual, (2) published mock-game team updates, (3) expressly adopted 2026 robot rules, and (4) organizer rulings. Where this draft says [TBD], organizers must publish a rule before the affected behavior can be consistently enforced.
+
+Appendix C — Field figures: author insertion stencils
+This appendix intentionally contains NO CAD-generated field views. Each numbered figure is a designated insertion point for a manually selected CAD screenshot or drawing. The organizer should replace each box, fill in the requested annotations, and update the caption. The STEP model is the geometry authority; the part-to-zone assignments below are the organizer’s explicit definitions.
+Figure C-1 — Full field overhead
+Figure C-2 — Full field isometric
+
+
