@@ -82,6 +82,53 @@ function buildChute(c, color) {
   return g;
 }
 
+// Field structures come from the Onshape STL (assets/field.bin, see tools/stl_to_field.py).
+// The procedural walls, pegs, chutes and platforms below stay as a stand-in until it loads,
+// or for good if it can't be fetched.
+const FIELD_URL = new URL('../assets/field.bin', import.meta.url);
+
+function fieldMaterials() {
+  const metal = std(0xd5d9de, { metalness: 0.8, roughness: 0.3 });
+  const clear = (c, op) => std(c, { transparent: true, opacity: op, roughness: 0.1, metalness: 0.1, depthWrite: false, side: THREE.DoubleSide });
+  const ally = (a, f = 0) => std(lighten(SIDES[a].color, f), { roughness: 0.55 });
+  return {
+    structure: std(0x6b7079, { roughness: 0.6, metalness: 0.2 }),
+    chute: std(0x585c63, { roughness: 0.6 }),
+    endwall: clear(0xdfeaf2, 0.22),
+    sidewall: clear(0xe9f1f6, 0.3),
+    post: metal,
+    ...Object.fromEntries(['blue', 'red'].flatMap((a) => [2, 3, 4].map((L) => [`platform-${a}-${L}`, ally(a, 0.06 + (L - 2) * 0.16)]))),
+    'wall-blue': ally('blue'), 'wall-red': ally('red'),
+    'station-blue': std(new THREE.Color(SIDES.blue.color).multiplyScalar(0.55), { roughness: 0.7 }),
+    'station-red': std(new THREE.Color(SIDES.red.color).multiplyScalar(0.55), { roughness: 0.7 }),
+  };
+}
+
+export async function loadFieldModel(url = FIELD_URL) {
+  const buf = await (await fetch(url)).arrayBuffer();
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== 0x31465454) throw new Error('field.bin: bad magic');   // 'TTF1'
+  const hlen = dv.getUint32(4, true);
+  const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, hlen)));
+  const q = new Int16Array(buf, 8 + hlen, head.verts * 3);
+  const pos = new Float32Array(q.length);
+  for (let i = 0; i < q.length; i++) pos[i] = q[i] * head.scale;
+  const idxOff = 8 + hlen + q.byteLength + (q.byteLength % 4);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(buf, idxOff, head.tris * 3), 1));
+  const mats = fieldMaterials(), list = [];
+  for (const [name, start, count] of head.groups) {
+    const m = mats[name] || mats.structure; m.flatShading = true;
+    let i = list.indexOf(m); if (i < 0) i = list.push(m) - 1;
+    geo.addGroup(start, count, i);
+  }
+  geo.computeBoundingSphere();
+  const mesh = new THREE.Mesh(geo, list);
+  mesh.name = 'field-cad'; mesh.castShadow = true; mesh.receiveShadow = true;
+  return mesh;
+}
+
 export function buildField(scene) {
   const group = new THREE.Group(); group.name = 'field';
   const { halfL, halfW, wallHeight } = FIELD;
@@ -97,12 +144,13 @@ export function buildField(scene) {
   carpet.rotation.x = -Math.PI / 2; carpet.receiveShadow = true;
   group.add(carpet);
 
+  const standIn = new THREE.Group(); standIn.name = 'field-stand-in'; group.add(standIn);
   // long boundary walls (polycarbonate + rails)
   for (const s of [-1, 1]) {
     const z = s * (halfW + 0.03);
-    group.add(box(FIELD.length + 0.2, wallHeight, 0.05, wallGl, 0, wallHeight / 2, z, false));
-    group.add(box(FIELD.length + 0.2, 0.05, 0.1, white, 0, wallHeight, z));
-    group.add(box(FIELD.length + 0.2, 0.08, 0.1, white, 0, 0.04, z));
+    standIn.add(box(FIELD.length + 0.2, wallHeight, 0.05, wallGl, 0, wallHeight / 2, z, false));
+    standIn.add(box(FIELD.length + 0.2, 0.05, 0.1, white, 0, wallHeight, z));
+    standIn.add(box(FIELD.length + 0.2, 0.08, 0.1, white, 0, 0.04, z));
   }
 
   const tapeW = std(0xf5f5f5, { roughness: 0.6 });
@@ -120,27 +168,27 @@ export function buildField(scene) {
     tape(group, S.loadingZone, tp, 0.05);
     tape(group, S.platformZone, tp, 0.05);
     tape(group, S.l1Area, dim, 0.05);
-    group.add(rectBox(S.shortWall, S.shortWall.height, solid));
+    standIn.add(rectBox(S.shortWall, S.shortWall.height, solid));
     for (const p of S.platforms) {
       const w = p.x1 - p.x0, d = p.z1 - p.z0;
       const side = std(col, { roughness: 0.6 }), top = std(lighten(col, 0.55), { roughness: 0.35 });
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, p.height, d), [side, side, top, side, side, side]);
       m.position.set((p.x0 + p.x1) / 2, p.height / 2, (p.z0 + p.z1) / 2); m.castShadow = m.receiveShadow = true;
-      group.add(m);
+      standIn.add(m);
     }
     // post wall
-    post[a] = buildPostWall(a); group.add(post[a]);
+    post[a] = buildPostWall(a); standIn.add(post[a]);
     // loading end wall + chutes
     const lz = S.loadingZone, ex = (lz.x0 + lz.x1) / 2 < 0 ? -halfL : halfL;
-    group.add(box(0.1, 1.0, lz.z1 - lz.z0, wallGl, ex + Math.sign(ex) * 0.05, 0.5, (lz.z0 + lz.z1) / 2, false));
-    group.add(box(0.12, 0.06, lz.z1 - lz.z0, white, ex + Math.sign(ex) * 0.05, 1.0, (lz.z0 + lz.z1) / 2));
-    for (const c of S.chutes) group.add(buildChute(c, col));
+    standIn.add(box(0.1, 1.0, lz.z1 - lz.z0, wallGl, ex + Math.sign(ex) * 0.05, 0.5, (lz.z0 + lz.z1) / 2, false));
+    standIn.add(box(0.12, 0.06, lz.z1 - lz.z0, white, ex + Math.sign(ex) * 0.05, 1.0, (lz.z0 + lz.z1) / 2));
+    for (const c of S.chutes) standIn.add(buildChute(c, col));
     // driver-station panels
     const dx = Math.sign(S.driverStationX) * (Math.abs(S.driverStationX) + 1.2);
     for (const z of [-2.7, 0, 2.7]) {
-      group.add(box(0.1, 0.55, 2.5, solid, dx, 0.275, z));
-      group.add(box(0.06, 1.45, 2.5, glass(lighten(col, 0.6), 0.28), dx, 1.275, z, false));
-      group.add(box(0.12, 0.08, 2.5, std(0x2b2f36), dx, 2.03, z));
+      standIn.add(box(0.1, 0.55, 2.5, solid, dx, 0.275, z));
+      standIn.add(box(0.06, 1.45, 2.5, glass(lighten(col, 0.6), 0.28), dx, 1.275, z, false));
+      standIn.add(box(0.12, 0.08, 2.5, std(0x2b2f36), dx, 2.03, z));
     }
   }
 
@@ -170,5 +218,10 @@ export function buildField(scene) {
   for (const s of [-1, 1]) group.add(box(0.5, 9, 40, std(0x161922), s * 24, 4.5, 0, false));
 
   scene.add(group);
-  return { group, carpet, postWalls: post, crowd };
+  const result = { group, carpet, postWalls: post, crowd, cad: null };
+  result.ready = loadFieldModel().then((mesh) => {
+    group.remove(standIn); group.add(mesh); result.cad = mesh;
+    return mesh;
+  }).catch((e) => { console.warn('Field CAD not loaded, using stand-in geometry:', e.message); return null; });
+  return result;
 }

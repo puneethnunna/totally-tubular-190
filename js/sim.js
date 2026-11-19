@@ -4,7 +4,7 @@ import { FIELD, TUBE, ROBOT, POINTS, SIDES, ALLIANCES, ROBOT_PRESETS, inRect } f
 const TAU = Math.PI * 2;
 const G = 9.81;
 const TR = TUBE.tubeRadius;
-const TIP_SPACING = 0.09;
+const TIP_SPACING = 0.14; // tubes are 5 in thick, so stack along the 24 in peg at 0.14 m
 const MAX_SUB = 1 / 60;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrap = (a) => a - TAU * Math.floor((a + Math.PI) / TAU);
@@ -45,6 +45,11 @@ export function createSim(options = {}) {
   for (const a of ALLIANCES) for (const p of SIDES[a].posts) posts.push({ ...p, tubes: [] });
   const postById = new Map(posts.map((p) => [p.id, p]));
   const walls = ALLIANCES.map((a) => SIDES[a].shortWall);
+  // Robots can't drive through the row of pegs; tubes still pass under them.
+  const postRails = ALLIANCES.map((a) => {
+    const ps = SIDES[a].posts, zs = ps.map((p) => p.z);
+    return { x0: Math.min(ps[0].tipX, ps[0].baseX), x1: Math.max(ps[0].tipX, ps[0].baseX), z0: Math.min(...zs) - 0.05, z1: Math.max(...zs) + 0.05 };
+  });
   const platforms = ALLIANCES.flatMap((a) => SIDES[a].platforms.map((p) => ({ ...p, alliance: a, id: `${a}-L${p.level}` })));
   const platRects = platforms;
 
@@ -346,7 +351,7 @@ export function createSim(options = {}) {
       }
     }
     if (!k.platform && r.action?.type !== 'climb') {
-      for (const q of walls) { const n = circleRect(r.x, r.z, R, q); if (n) { r.x += n[0] * n[2]; r.z += n[1] * n[2]; bump(n); } }
+      for (const q of [...walls, ...postRails]) { const n = circleRect(r.x, r.z, R, q); if (n) { r.x += n[0] * n[2]; r.z += n[1] * n[2]; bump(n); } }
       for (const q of platRects) { const n = circleRect(r.x, r.z, R, q); if (n) { r.x += n[0] * n[2]; r.z += n[1] * n[2]; bump(n); } }
     }
     const mx = FIELD.halfL - R, mz = FIELD.halfW - R;
@@ -390,8 +395,6 @@ export function createSim(options = {}) {
   function tubeWalls(t) {
     const r = TUBE.outerRadius;
     const mx = FIELD.halfL - r, mz = FIELD.halfW - r;
-    if (t.x < -mx) { t.x = -mx; if (t.vx < 0) t.vx = -t.vx * TUNE.wallRest; } else if (t.x > mx) { t.x = mx; if (t.vx > 0) t.vx = -t.vx * TUNE.wallRest; }
-    if (t.z < -mz) { t.z = -mz; if (t.vz < 0) t.vz = -t.vz * TUNE.wallRest; } else if (t.z > mz) { t.z = mz; if (t.vz > 0) t.vz = -t.vz * TUNE.wallRest; }
     const bounce = (q) => {
       const n = circleRect(t.x, t.z, r, q);
       if (!n) return;
@@ -401,6 +404,9 @@ export function createSim(options = {}) {
     };
     for (const q of walls) bounce(q);
     for (const q of platRects) bounce(q);
+    // Field boundary last: platforms sit flush with the side wall, so a bounce can push past it.
+    if (t.x < -mx) { t.x = -mx; if (t.vx < 0) t.vx = -t.vx * TUNE.wallRest; } else if (t.x > mx) { t.x = mx; if (t.vx > 0) t.vx = -t.vx * TUNE.wallRest; }
+    if (t.z < -mz) { t.z = -mz; if (t.vz < 0) t.vz = -t.vz * TUNE.wallRest; } else if (t.z > mz) { t.z = mz; if (t.vz > 0) t.vz = -t.vz * TUNE.wallRest; }
   }
 
   function tubeRobot(t) {

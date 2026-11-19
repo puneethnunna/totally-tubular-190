@@ -62,7 +62,7 @@ const cl = sim.state.robots[0]; // stacker maxClimb 3
 cl.x = -1.2; cl.z = -2.0; cl.heading = -Math.PI / 2;
 sim.step(dt, {}, 'endgame');
 for (let i = 0; i < 300; i++) sim.step(dt, { 'blue-0': { climb: true, moveZ: -0.2 } }, 'endgame');
-assert.equal(cl.support, 2, 'climbed L2'); assert.equal(cl.y, 0.2);
+assert.equal(cl.support, 2, 'climbed L2'); assert.equal(cl.y, SIDES.blue.platforms[0].height);
 cl.heading = 0;
 for (let i = 0; i < 300; i++) sim.step(dt, { 'blue-0': { climb: true, moveX: 0.3 } }, 'endgame');
 assert.equal(cl.support, 3, 'climbed L3 ' + cl.x);
@@ -103,7 +103,7 @@ for (let i = 0; i < 125 * 120; i++) {
   }
   for (const q of sim.state.tubes) {
     for (const v of [q.x, q.y, q.z, q.vx, q.vy, q.vz]) assert.ok(Number.isFinite(v), 'NaN tube');
-    assert.ok(Math.abs(q.x) <= FIELD.halfL + 1e-6 && Math.abs(q.z) <= FIELD.halfW + 1e-6, 'tube in field ' + q.state);
+    assert.ok(Math.abs(q.x) <= FIELD.halfL + 1e-6 && Math.abs(q.z) <= FIELD.halfW + 1e-6, 'tube in field ' + q.state + ' ' + q.x.toFixed(3) + ',' + q.z.toFixed(3) + ' ' + q.id);
   }
   for (const pp of sim.state.posts) assert.ok(pp.tubes.length <= POINTS.maxPhysicalPerPost);
 }

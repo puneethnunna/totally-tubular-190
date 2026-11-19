@@ -4,11 +4,12 @@
 // The field is diagonally symmetric: red geometry = blue geometry rotated 180° about y
 // (x,z) -> (-x,-z). Use mirror() to derive one side from the other.
 
+// Geometry below is measured from the Onshape field STL (assets/field.bin, tools/stl_to_field.py).
 export const FIELD = {
-  length: 16.5,          // x extent: -8.25 .. 8.25
-  width: 8.0,            // z extent: -4 .. 4
-  halfL: 8.25,
-  halfW: 4.0,
+  length: 16.46,         // x extent between end-wall faces: -8.23 .. 8.23
+  width: 7.62,           // z extent between side walls: -3.81 .. 3.81 (25 ft)
+  halfL: 8.23,
+  halfW: 3.81,
   wallHeight: 0.5,
 };
 
@@ -34,8 +35,8 @@ export const POINTS = {
 export const RP = { win: 3, tie: 1, posts8: 1, posts12: 1, platform16: 1 };
 
 export const TUBE = {
-  outerRadius: 0.25,     // footprint radius on the floor
-  tubeRadius: 0.07,      // torus cross-section radius
+  outerRadius: 0.279,    // 22 in outside diameter
+  tubeRadius: 0.0635,    // 5 in thick
   mass: 0.4,
   friction: 2.5,         // linear damping on floor (1/s)
   perAlliance: 108,
@@ -59,31 +60,31 @@ export const inRect = (r, x, z, pad = 0) => x >= r.x0 + pad && x <= r.x1 - pad &
 
 // ---------- BLUE-side definitions (red derived by mirroring) ----------
 // Blue SCORES on the +x end (in front of RED driver stations). Blue LOADS at the -x end.
-const POST_Z_RED = [-1.13, -0.50, 0.12, 0.77, 1.39, 2.03, 2.66, 3.30]; // red posts on the -x wall
-const blueScoringZone = rect(5.18, 8.25, -4.0, 1.86);
-const blueFloorArea   = rect(7.0, 8.25, -4.0, 1.86);   // LEVEL 1 SCORING AREA (no cap)
-const blueLoadingZone = rect(-8.25, -5.18, -4.0, -1.86);
-const bluePlatformZone = rect(-1.9, 1.9, -4.0, -1.4);
-const blueL1Area      = rect(-1.8, 1.8, -2.7, -1.5);   // taped carpet LEVEL 1
-const bluePlatforms = [ // LEVEL 2,3,4 raised boxes against the -z wall
-  { level: 2, height: 0.20, ...rect(-1.9, -0.633, -4.0, -2.7) },
-  { level: 3, height: 0.40, ...rect(-0.633, 0.633, -4.0, -2.7) },
-  { level: 4, height: 0.60, ...rect(0.633, 1.9, -4.0, -2.7) },
+const POST_Z_RED = [-1.067, -0.457, 0.152, 0.762, 1.372, 1.981, 2.591, 3.200]; // red posts on the -x wall, 24 in pitch
+const blueScoringZone = rect(5.18, 8.23, -3.81, 1.733);
+const blueFloorArea   = rect(7.0, 8.23, -3.81, 1.733);  // LEVEL 1 SCORING AREA (no cap)
+const blueLoadingZone = rect(-8.23, -5.18, -3.81, -1.733);
+const bluePlatformZone = rect(-1.829, 1.829, -3.81, -1.4);
+const blueL1Area      = rect(-1.829, 1.829, -2.591, -1.5); // taped carpet LEVEL 1
+const bluePlatforms = [ // LEVEL 2,3,4 raised boxes (48 in squares) against the -z wall
+  { level: 2, height: 0.152, ...rect(-1.829, -0.610, -3.81, -2.591) },
+  { level: 3, height: 0.483, ...rect(-0.610, 0.610, -3.81, -2.591) },
+  { level: 4, height: 0.813, ...rect(0.610, 1.829, -3.81, -2.591) },
 ];
 const blueChutes = [ // where human-player tubes enter; dir points into the field
-  { x: -7.25, z: -4.0, dirX: 0, dirZ: 1 },
-  { x: -6.20, z: -4.0, dirX: 0, dirZ: 1 },
-  { x: -8.25, z: -2.95, dirX: 1, dirZ: 0 },
+  { x: -6.706, z: -3.81, dirX: 0, dirZ: 1 },
+  { x: -5.690, z: -3.81, dirX: 0, dirZ: 1 },
+  { x: -8.23, z: -2.286, dirX: 1, dirZ: 0 },
 ];
 const blueStarts = [ // inside own scoring zone, outside floor area (G109); heading π = facing -x
   { x: 6.1, z: -2.8, heading: Math.PI },
   { x: 6.1, z: -0.9, heading: Math.PI },
   { x: 6.1, z: 1.0, heading: Math.PI },
 ];
-const blueStagingRow = POST_Z_RED.map((_, i) => ({ x: 0.29, z: [-2.24, -1.64, -1.05, -0.40, 0.25, 0.91, 1.56, 2.19][i] }));
+const blueStagingRow = [-2.134, -1.524, -0.914, -0.305, 0.305, 0.914, 1.524, 2.134].map((z) => ({ x: 0.279, z }));
 // Short wall separating blue LOADING ZONE from red SCORING ZONE (robots cannot cross).
-const blueShortWall = { ...rect(-8.25, -5.18, -1.89, -1.83), height: 0.5 };
-const blueDriverCam = { pos: { x: -10.8, y: 7.0, z: 0.8 }, look: { x: 0.8, y: 0, z: 0 } }; // high enough to see over the post wall
+const blueShortWall = { ...rect(-8.23, -5.791, -1.791, -1.676), height: 1.194 };
+const blueDriverCam = { pos: { x: -10.6, y: 4.6, z: 0.8 }, look: { x: 0.8, y: 0, z: 0 } }; // looks through the clear end wall
 
 function makePosts(alliance) {
   // Posts that `alliance` scores on. Red posts sit on the -x wall, protruding toward +x.
@@ -92,9 +93,9 @@ function makePosts(alliance) {
     POST_Z_RED.forEach((z, index) => {
       const p = {
         id: `${alliance}-${tier}-${index}`, alliance, tier, index,
-        baseX: -8.25, z,
-        tipX: tier === 'lower' ? -7.85 : -7.95,
-        y: tier === 'lower' ? 0.9 : 1.7,
+        baseX: -8.23, z,
+        tipX: -7.62,                             // 24 in pegs
+        y: tier === 'lower' ? 0.6096 : 2.54,
         dirX: 1,
       };
       if (alliance === 'blue') { p.baseX = -p.baseX; p.tipX = -p.tipX; p.z = -p.z; p.dirX = -1; }
@@ -122,7 +123,7 @@ function side(alliance) {
     stagingRow: blueStagingRow.map(mp),
     shortWall: { ...m(blueShortWall), height: blueShortWall.height },
     posts: makePosts(alliance),
-    driverCam: b ? blueDriverCam : { pos: { x: 10.8, y: 7.0, z: -0.8 }, look: { x: -0.8, y: 0, z: 0 } },
+    driverCam: b ? blueDriverCam : { pos: { x: 10.6, y: 4.6, z: -0.8 }, look: { x: -0.8, y: 0, z: 0 } },
     driverStationX: b ? -8.6 : 8.6,
     // Joystick "up" on screen maps to this field direction for this alliance's drivers.
     screenForward: b ? { x: 1, z: 0 } : { x: -1, z: 0 },

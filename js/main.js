@@ -34,7 +34,7 @@ if (missing.length) ui.error(`Missing modules: ${missing.join(', ')}. Add ?stubs
 try {
   if (!missing.includes('renderer') || useStub('renderer')) {
     renderer = M.renderer?.createRenderer(canvas);
-    M.field3d?.buildField(renderer.scene);
+    if (!renderer.field) M.field3d?.buildField(renderer.scene); // the real renderer builds its own field
     renderer.setQuality?.(settings.quality);
   }
 } catch (e) { console.error(e); ui.error('Could not start the 3D renderer: ' + e.message); renderer = null; }
