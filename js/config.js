@@ -61,11 +61,12 @@ export const inRect = (r, x, z, pad = 0) => x >= r.x0 + pad && x <= r.x1 - pad &
 // ---------- BLUE-side definitions (red derived by mirroring) ----------
 // Blue SCORES on the +x end (in front of RED driver stations). Blue LOADS at the -x end.
 const POST_Z_RED = [-1.067, -0.457, 0.152, 0.762, 1.372, 1.981, 2.591, 3.200]; // red posts on the -x wall, 24 in pitch
-const blueScoringZone = rect(5.18, 8.23, -3.81, 1.733);
-const blueFloorArea   = rect(7.0, 8.23, -3.81, 1.733);  // LEVEL 1 SCORING AREA (no cap)
-const blueLoadingZone = rect(-8.23, -5.18, -3.81, -1.733);
-const bluePlatformZone = rect(-1.829, 1.829, -3.81, -1.4);
-const blueL1Area      = rect(-1.829, 1.829, -2.591, -1.5); // taped carpet LEVEL 1
+// Zone edges are the outer edges of the CAD's 2 in tape lines (floor face splits in the STL).
+const blueScoringZone = rect(5.182, 8.23, -3.81, 1.727);
+const blueFloorArea   = rect(7.01, 8.23, -3.81, 1.727);   // LEVEL 1 SCORING AREA (no cap)
+const blueLoadingZone = rect(-8.23, -5.182, -3.81, -1.727);
+const bluePlatformZone = rect(-1.829, 1.829, -3.81, -1.391);
+const blueL1Area      = rect(-1.829, 1.829, -2.591, -1.391); // taped carpet LEVEL 1
 const bluePlatforms = [ // LEVEL 2,3,4 raised boxes (48 in squares) against the -z wall
   { level: 2, height: 0.152, ...rect(-1.829, -0.610, -3.81, -2.591) },
   { level: 3, height: 0.483, ...rect(-0.610, 0.610, -3.81, -2.591) },

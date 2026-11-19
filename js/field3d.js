@@ -93,6 +93,8 @@ function fieldMaterials() {
   const ally = (a, f = 0) => std(lighten(SIDES[a].color, f), { roughness: 0.55 });
   return {
     structure: std(0x6b7079, { roughness: 0.6, metalness: 0.2 }),
+    floor: new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 1 }),
+    base: std(0x23262d, { roughness: 0.95 }),
     chute: std(0x585c63, { roughness: 0.6 }),
     endwall: clear(0xdfeaf2, 0.22),
     sidewall: clear(0xe9f1f6, 0.3),
@@ -102,6 +104,33 @@ function fieldMaterials() {
     'station-blue': std(new THREE.Color(SIDES.blue.color).multiplyScalar(0.55), { roughness: 0.7 }),
     'station-red': std(new THREE.Color(SIDES.red.color).multiplyScalar(0.55), { roughness: 0.7 }),
   };
+}
+
+// Paints the zones onto the CAD carpet face. UV (0,0) is the field corner at (-halfL, -halfW).
+function floorTexture() {
+  const W = 4096, H = Math.round(W * FIELD.width / FIELD.length), k = W / FIELD.length;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  const R = (r, fill) => { g.fillStyle = fill; g.fillRect((r.x0 + FIELD.halfL) * k, (r.z0 + FIELD.halfW) * k, (r.x1 - r.x0) * k, (r.z1 - r.z0) * k); };
+  const tapeIn = (r, col, w = 0.0508) => { // 2 in tape on the inside of a zone edge, like the CAD's split faces
+    const { x0, x1, z0, z1 } = r;
+    R({ x0, x1, z0, z1: z0 + w }, col); R({ x0, x1, z0: z1 - w, z1 }, col);
+    R({ x0, x1: x0 + w, z0, z1 }, col); R({ x0: x1 - w, x1, z0, z1 }, col);
+  };
+  g.fillStyle = '#8a8d92'; g.fillRect(0, 0, W, H);
+  const n = g.getImageData(0, 0, W, H);
+  for (let i = 0; i < n.data.length; i += 4) { const d = (Math.random() - 0.5) * 16; n.data[i] += d; n.data[i + 1] += d; n.data[i + 2] += d; }
+  g.putImageData(n, 0, 0);
+  for (const a of ALLIANCES) {
+    const S = SIDES[a], col = '#' + new THREE.Color(S.color).getHexString();
+    R(S.loadingZone, col);
+    R(S.floorArea, col);
+    tapeIn(S.scoringZone, col);
+    tapeIn(S.platformZone, col);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
 }
 
 export async function loadFieldModel(url = FIELD_URL) {
@@ -116,10 +145,16 @@ export async function loadFieldModel(url = FIELD_URL) {
   const idxOff = 8 + hlen + q.byteLength + (q.byteLength % 4);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const uv = new Float32Array(head.verts * 2);   // top-down projection, only the floor material samples it
+  for (let i = 0; i < head.verts; i++) {
+    uv[i * 2] = (pos[i * 3] + FIELD.halfL) / FIELD.length;
+    uv[i * 2 + 1] = (pos[i * 3 + 2] + FIELD.halfW) / FIELD.width;
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geo.setIndex(new THREE.BufferAttribute(new Uint32Array(buf, idxOff, head.tris * 3), 1));
   const mats = fieldMaterials(), list = [];
   for (const [name, start, count] of head.groups) {
-    const m = mats[name] || mats.structure; m.flatShading = true;
+    const m = mats[name] || mats.structure; if (name !== 'floor') m.flatShading = true;
     let i = list.indexOf(m); if (i < 0) i = list.push(m) - 1;
     geo.addGroup(start, count, i);
   }
@@ -139,12 +174,12 @@ export function buildField(scene) {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), std(0x2a2e38, { roughness: 0.95 }));
   ground.rotation.x = -Math.PI / 2; ground.position.y = -0.03; ground.receiveShadow = true;
   group.add(ground);
-  group.add(box(FIELD.length + 3, 0.04, FIELD.width + 3, std(0x1c1f27), 0, -0.03, 0, false)); // apron
+  // Everything in standIn is a procedural copy shown until the CAD model loads (or if it can't).
+  const standIn = new THREE.Group(); standIn.name = 'field-stand-in'; group.add(standIn);
+  standIn.add(box(FIELD.length + 3, 0.04, FIELD.width + 3, std(0x1c1f27), 0, -0.03, 0, false)); // apron
   const carpet = new THREE.Mesh(new THREE.PlaneGeometry(FIELD.length, FIELD.width), new THREE.MeshStandardMaterial({ map: carpetTexture(), roughness: 1 }));
   carpet.rotation.x = -Math.PI / 2; carpet.receiveShadow = true;
-  group.add(carpet);
-
-  const standIn = new THREE.Group(); standIn.name = 'field-stand-in'; group.add(standIn);
+  standIn.add(carpet);
   // long boundary walls (polycarbonate + rails)
   for (const s of [-1, 1]) {
     const z = s * (halfW + 0.03);
@@ -154,7 +189,7 @@ export function buildField(scene) {
   }
 
   const tapeW = std(0xf5f5f5, { roughness: 0.6 });
-  group.add(flat({ x0: -0.03, x1: 0.03, z0: -halfW, z1: halfW }, tapeW, 0.011)); // midline
+  standIn.add(flat({ x0: -0.03, x1: 0.03, z0: -halfW, z1: halfW }, tapeW, 0.011)); // midline (stand-in only; the CAD has none)
 
   const post = {};
   for (const a of ALLIANCES) {
@@ -162,12 +197,12 @@ export function buildField(scene) {
     const solid = std(col, { roughness: 0.65 });
     const tp = std(col, { roughness: 0.6 });
     const dim = std(lighten(col, -0.0).multiplyScalar(0.55), { roughness: 0.6 });
-    group.add(flat(S.floorArea, solid, 0.008));                                          // LEVEL 1 SCORING AREA
-    tape(group, S.scoringZone, tp, 0.07);
-    group.add(flat(S.loadingZone, std(col, { transparent: true, opacity: 0.55, depthWrite: false }), 0.007)); // loading zone
-    tape(group, S.loadingZone, tp, 0.05);
-    tape(group, S.platformZone, tp, 0.05);
-    tape(group, S.l1Area, dim, 0.05);
+    standIn.add(flat(S.floorArea, solid, 0.008));                                        // LEVEL 1 SCORING AREA
+    tape(standIn, S.scoringZone, tp, 0.07);
+    standIn.add(flat(S.loadingZone, std(col, { transparent: true, opacity: 0.55, depthWrite: false }), 0.007)); // loading zone
+    tape(standIn, S.loadingZone, tp, 0.05);
+    tape(standIn, S.platformZone, tp, 0.05);
+    tape(standIn, S.l1Area, dim, 0.05);
     standIn.add(rectBox(S.shortWall, S.shortWall.height, solid));
     for (const p of S.platforms) {
       const w = p.x1 - p.x0, d = p.z1 - p.z0;
@@ -204,7 +239,7 @@ export function buildField(scene) {
     }
     group.add(box(44, 9, 0.5, std(0x1a1d27, { roughness: 0.9 }), 0, 4.5, s * 14));         // back wall
     group.add(box(44, 0.8, 0.52, std(SIDES[s < 0 ? 'blue' : 'red'].color, { roughness: 0.6 }), 0, 6.2, s * 13.7)); // banner
-    group.add(box(44, 0.15, 6, std(0x2c3040), 0, 0.25, s * 5.2)); // curb
+    group.add(box(44, 0.15, 1.5, std(0x2c3040), 0, 0.25, s * 5.2)); // curb, kept outside the CAD footprint (|z| > 4.33)
   }
   const crowd = new THREE.InstancedMesh(crowdGeo, new THREE.MeshStandardMaterial({ roughness: 0.9 }), seats.length);
   const mtx = new THREE.Matrix4(), col = new THREE.Color();

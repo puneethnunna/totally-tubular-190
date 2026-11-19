@@ -3,8 +3,8 @@
 Usage: python3 tools/stl_to_field.py "Field - Part Studio 1 - Main.stl" assets/field.bin
 
 The STL is meters, Z-up. Sim/Three.js is Y-up with the long axis on x, so
-sim (x, y, z) = (stl y, stl z, stl x). Staging tubes and the carpet are dropped
-(the sim draws its own live tubes and a carpet with zone tape). Every remaining
+sim (x, y, z) = (stl y, stl z, stl x). Only the 16 staging tubes are dropped
+(the sim draws its own live tubes in the same spots). Every remaining
 triangle is tagged with a part group so the renderer can color it.
 
 field.bin layout (little endian):
@@ -26,7 +26,7 @@ inside = lambda x0, x1, y0, y1, z0, z1: (lo[:, 0] >= x0) & (hi[:, 0] <= x1) & (l
 ax = np.abs(T[:, :, 0]).max(1); az = np.abs(T[:, :, 2]).max(1)
 cx, cy, cz = T[:, :, 0].mean(1), T[:, :, 1].mean(1), T[:, :, 2].mean(1)
 
-drop = inside(-0.62, 0.62, -0.01, 0.14, -2.45, 2.45) | (hi[:, 1] <= 0.0065)   # staging tubes, carpet + floor decals
+drop = inside(-0.62, 0.62, -0.01, 0.14, -2.45, 2.45)   # staging tubes: the sim draws live ones in the same spots
 group = np.full(len(T), 'structure', dtype=object)
 plat = (ax <= 1.835) & (az >= 2.585) & (az <= 3.815) & (hi[:, 1] <= 0.82)
 lvl = np.where(np.abs(cx) <= 0.61, 3, np.where(cx * np.sign(cz) < 0, 4, 2))   # blue L2 at -x, red mirrored
@@ -47,6 +47,8 @@ side = (np.abs(cz) >= 3.80) & (np.abs(cz) <= 3.96) & (hi[:, 1] > 0.05) & ~plat
 group[side] = 'sidewall'
 chute = (((np.abs(cz) > 3.81) | (np.abs(cx) > 8.23)) & (np.abs(cx) > 5.0)) & (hi[:, 1] < 1.85) & (group == 'structure')
 group[chute] = 'chute'
+group[hi[:, 1] <= 1e-4] = 'base'                                            # floor plate layers under the carpet
+group[(np.abs(hi[:, 1]) <= 1e-5) & (np.abs(lo[:, 1]) <= 1e-5) & (ax <= 8.231) & (az <= 3.811)] = 'floor'  # carpet top, zones painted on
 
 keep = ~drop
 T, group = T[keep], group[keep]
