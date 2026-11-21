@@ -246,3 +246,26 @@ body.nogui .bl,body.nogui .br{display:none}
  .bar .btn{min-width:0;flex:1}.top,.bar,.foot,.pk{padding-left:16px;padding-right:16px}.cols{padding-left:16px;padding-right:16px}
  .bl{min-width:0;left:6px;bottom:6px}.br{display:none}
 }
+
+/* controls settings: key chips, note bar, controller test, stats + breakdown overlays */
+.notebar{display:flex;justify-content:space-between;gap:12px;color:var(--ink-3);font-size:12px;margin:8px 0}
+.notebar .kmsg:empty::before,.notebar .pmsg:empty::before{content:'\00a0'}
+.srow .ctl .kc{min-width:36px}
+.ctest{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:12px 14px;margin:14px 0}
+.ct-h{font-family:var(--hf);font-weight:800;font-stretch:75%;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.ct-msg{font-size:12px;color:var(--ink-2);margin:6px 0 10px;min-height:16px}
+.ct-b{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px}
+.ct-b i{font-style:normal;min-width:30px;padding:3px 6px;border:1px solid var(--line-strong);border-radius:5px;background:var(--sunk);font-size:11px;text-align:center;color:var(--ink-3)}
+.ct-b i.on{background:var(--gold);color:#111;border-color:var(--gold)}
+.ct-a{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px}
+.ct-a div{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink-3)}
+.ct-a span{width:18px}.ct-a em{font-style:normal;width:38px;text-align:right;color:var(--ink-2)}
+.ct-a b{position:relative;flex:1;height:6px;border-radius:3px;background:#ffffff18}
+.ct-a b::before{content:'';position:absolute;left:50%;top:-2px;width:1px;height:10px;background:#ffffff40}
+.ct-a u{position:absolute;top:0;height:100%;background:var(--gold);border-radius:3px}
+.stats{position:absolute;top:64px;left:12px;padding:3px 8px;border-radius:5px;background:#000a;border:1px solid var(--line);font:600 11px/16px var(--bf);color:var(--ink-2);pointer-events:none}
+.bd{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.bd[hidden]{display:none}
+.bdc{min-width:340px;padding:14px 18px;border:1px solid var(--line-strong);border-radius:12px;background:#0c0d10ee;backdrop-filter:blur(6px)}
+.bdc h4{margin:0 0 8px;font-family:var(--hf);font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold)}
+.bdc table{font-size:12px}.bdc .n{text-align:right}

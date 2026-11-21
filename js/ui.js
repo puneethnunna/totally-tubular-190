@@ -1,7 +1,7 @@
 // Menus, setup flow, HUD, pause, results. Keyboard "layers": ↑↓ move, ←→ adjust, Enter select, Esc back.
 // Optional modules (robots / preview3d / importDialog) are imported dynamically with graceful fallbacks.
 import { SIDES, ROBOT_PRESETS, ROBOT, FIELD, POINTS, TIMING, RP, TUBE, opponent } from './config.js';
-import { ACTIONS, DEFAULT_KEYS, keyLabel } from './input.js';
+import { ACTIONS, GROUPS, MAX_CHIPS, DEFAULT_PADCFG, keyLabel, padLabel, effectiveKeys, effectivePad, rebindKey, rebindPad, migrateControls, detectBinding, tierLabel } from './input.js';
 
 const opt = (p) => import(p).catch((e) => { console.warn('optional module', p, e.message); return null; });
 const [RBM, PV, IMP] = await Promise.all([opt('./robots.js'), opt('./preview3d.js'), opt('./importDialog.js')]);
@@ -9,11 +9,11 @@ const [RBM, PV, IMP] = await Promise.all([opt('./robots.js'), opt('./preview3d.j
 // ---------- settings ----------
 const KEY = 'tt-settings';
 export const DEFAULTS = { quality: 'high', background: true, camera: 'driver', cameraFollow: 'smooth', hideGui: false, fieldRelative: true, autoHP: true,
-  driverName: '', volume: 100, speeds: [40, 70, 100], midfield: 8, difficulty: 'normal', mode: '1v1', alliance: 'blue', robotId: '', keys: {} };
+  driverName: '', volume: 100, speeds: [40, 70, 100], midfield: 8, difficulty: 'normal', mode: '1v1', alliance: 'blue', robotId: '', keys: {}, pad: {}, padCfg: { ...DEFAULT_PADCFG }, ctlVersion: 0, showStats: false };
 export function loadSettings() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
-  s = { ...DEFAULTS, ...s };
+  s = migrateControls({ ...DEFAULTS, ...s });
   if (s.camera === 'chase') s.camera = 'third';
   if (!['driver', 'third', 'first'].includes(s.camera)) s.camera = 'driver';
   if (!Array.isArray(s.speeds) || s.speeds.length !== 3) s.speeds = [...DEFAULTS.speeds];
@@ -79,7 +79,7 @@ export function createUI(app) {
   const $ui = document.getElementById('ui'), $ov = document.getElementById('overlay'), $hud = document.getElementById('hud');
   const $toasts = document.getElementById('toasts'), $cd = document.getElementById('countdown');
   const st = app.settings;
-  const save = () => { saveSettings(st); app.onSettings?.(); };
+  const save = () => { saveSettings(st); hintDev = null; app.onSettings?.(); };
 
   // ---------- layer / focus engine ----------
   const stack = [];
@@ -123,6 +123,7 @@ export function createUI(app) {
   });
   addEventListener('keydown', (e) => {
     if (!capturing) return;
+    if (capturing.pad && e.key !== 'Escape' && e.key !== 'Backspace') return;
     e.preventDefault(); e.stopImmediatePropagation();
     capturing.done(e.key === 'Escape' ? null : e.key === 'Backspace' ? '' : e.code);
   }, true);
@@ -443,11 +444,11 @@ export function createUI(app) {
   // ---------- settings ----------
   const setEl = mkScreen('settings', `${topbar(CRUMB)}<h1 class="ptitle">Settings</h1><div class="swh" style="width:min(600px,100%);margin:0 auto;padding:0 12px"><div class="tabs"></div></div><div class="sw"></div><div class="bar"></div>`);
   const TABS = ['general', 'display', 'keyboard', 'controller'];
-  let tab = 'general', sLayer = null;
+  let tab = 'general', sLayer = null, rumT = 0, hintDev = null;
   const tabsEl = setEl.querySelector('.tabs'), swEl = setEl.querySelector('.sw');
   tabsEl.innerHTML = TABS.map((t) => `<button data-t="${t}">${t}</button>`).join('');
   tabsEl.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.t)));
-  const sBack = btn('Back', () => goBack()), sReset = btn('Reset controls', () => { st.keys = {}; st.speeds = [...DEFAULTS.speeds]; save(); setTab(tab); });
+  const sBack = btn('Back', () => goBack()), sReset = btn('Reset controls', () => { st.keys = {}; st.pad = {}; st.speeds = [...DEFAULTS.speeds]; save(); setTab(tab); kbNote('Controls reset to defaults.'); });
   const sbar = setEl.querySelector('.bar'); sbar.appendChild(sBack.el); sbar.appendChild(h('<span class="sp"></span>')); sbar.appendChild(sReset.el);
   const tabsItem = { el: tabsEl, adjust: (d) => setTab(TABS[(TABS.indexOf(tab) + d + TABS.length) % TABS.length], true), activate: () => {} };
   const clampv = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -466,20 +467,82 @@ export function createUI(app) {
   };
   const OO = [{ v: false, t: 'Off' }, { v: true, t: 'On' }];
   const group = (title, rows) => { const w = h(`<div><div class="sec">${title}</div><div class="srows"></div></div>`); rows.forEach((r) => w.querySelector('.srows').appendChild(r.el)); return w; };
-  function keyRow(id, label) {
-    const el = h(`<div class="srow"><span>${label}</span><div class="ctl"></div></div>`), ctl = el.querySelector('.ctl');
-    const list = () => (st.keys[id] || DEFAULT_KEYS[id] || []);
+  // ----- rebinding helpers -----
+  let kbMsg = null;
+  const CAPHINT = 'Press a key… Esc cancels, Backspace clears';
+  const kbNote = (t) => { if (kbMsg) kbMsg.textContent = t || 'Click a key to change it.'; };
+  const startCapture = (opts) => {
+    if (capturing) capturing.done(null);
+    capturing = { pad: !!opts.pad, done: (v) => { capturing = null; opts.done(v); } };
+    if (opts.pad) padWatch(capturing, opts.pad);
+  };
+  // wait for the pad to be released, then resolve with the first button / stick direction pushed
+  function padWatch(cap, kind) {
+    const pc = () => ({ ...DEFAULT_PADCFG, ...(st.padCfg || {}) });
+    let armed = false;
+    const tick = () => {
+      if (capturing !== cap) return;
+      const pad = pickPad(), b = pad ? detectBinding(pad, pc()) : null;
+      if (!b) armed = true; else if (armed) return cap.done(b);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+  const kbRows = [];
+  function keyRow(a) {
+    const id = a.id, el = h(`<div class="srow"><span>${a.label}</span><div class="ctl"></div></div>`), ctl = el.querySelector('.ctl');
     const paint = () => {
-      ctl.innerHTML = list().map((c, i) => `<button class="kc" data-i="${i}">${keyLabel(c)}</button>`).join('') + (list().length < 3 ? '<button class="kc add" data-i="+">+</button>' : '');
+      const l = effectiveKeys(st.keys)[id];
+      ctl.innerHTML = l.map((c, i) => `<button class="kc" data-i="${i}">${keyLabel(c)}</button>`).join('') + (l.length < MAX_CHIPS ? '<button class="kc add" data-i="+">+</button>' : '');
       ctl.querySelectorAll('.kc').forEach((b) => b.addEventListener('click', () => cap(b)));
     };
     function cap(b) {
-      b.classList.add('cap'); b.textContent = 'press a key';
-      capturing = { done: (code) => { capturing = null; const a = [...list()], i = b.dataset.i === '+' ? a.length : +b.dataset.i;
-        if (code === '') a.splice(i, 1); else if (code) a[i] = code;
-        st.keys = { ...st.keys, [id]: a.filter(Boolean) }; save(); paint(); } };
+      const idx = b.dataset.i === '+' ? '+' : +b.dataset.i;
+      b.classList.add('cap'); b.textContent = '…'; kbNote(CAPHINT);
+      startCapture({ done: (code) => {
+        let note = '';
+        if (code !== null) { const r = rebindKey(st.keys, id, idx, code); st.keys = r.map; note = r.note; save(); }
+        kbRows.forEach((r) => r.paint()); kbNote(note);
+      } });
     }
-    paint(); return { el, activate: () => cap(ctl.querySelector('.kc')) };
+    const row = { el, paint, activate: () => cap(ctl.querySelector('.kc')) }; kbRows.push(row); paint(); return row;
+  }
+  const pickPad = () => { const all = [...(navigator.getGamepads?.() || [])], d = st.padCfg?.device; return (d !== 'auto' && all[d]) || all.find(Boolean) || null; };
+  const padRows = [];
+  function padRow(a, note) {
+    const id = a.id, el = h(`<div class="srow"><span>${a.label}</span><div class="ctl"><button class="kc"></button></div></div>`), chip = el.querySelector('.kc');
+    const paint = () => { const b = effectivePad(st.pad)[id]; chip.textContent = b ? padLabel(b) : '—'; chip.classList.toggle('add', !b); chip.classList.remove('cap'); };
+    const cap = () => {
+      if (!pickPad()) return note('Plug in a controller, or press a button on one, to change its buttons.');
+      chip.classList.add('cap'); chip.textContent = '…'; note('Press a button or push a stick / trigger… Esc cancels, Backspace clears');
+      startCapture({ pad: true, done: (b) => {
+        let n = '';
+        if (b !== null) { const r = rebindPad(st.pad, id, b === '' ? null : b); st.pad = r.map; n = r.note; save(); }
+        padRows.forEach((r) => r.paint()); note(n);
+      } });
+    };
+    chip.addEventListener('click', cap);
+    const row = { el, paint, activate: cap, onClick: cap }; padRows.push(row); paint(); return row;
+  }
+  const padStatus = () => { const p = pickPad(); return p ? esc(p.id.replace(/\s*\(.*$/, '').slice(0, 48) || 'Controller') : 'Not connected'; };
+  const FLIP = (i) => (st.padCfg.flipAB && i < 2 ? 1 - i : st.padCfg.flipXY && (i === 2 || i === 3) ? 5 - i : i);
+  const BTNN = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'Back', 'Start', 'L3', 'R3', 'D↑', 'D↓', 'D←', 'D→', 'Home'];
+  function controllerTest() {
+    const el = h(`<div class="ctest"><div class="ct-h">Controller test</div><div class="ct-msg">Press a button on your controller</div>
+      <div class="ct-b">${BTNN.map((n) => `<i>${n}</i>`).join('')}</div><div class="ct-a">${['LX', 'LY', 'RX', 'RY'].map((n) => `<div><span>${n}</span><b><u></u></b><em>0.00</em></div>`).join('')}</div></div>`);
+    const bs = [...el.querySelectorAll('.ct-b i')], as = [...el.querySelectorAll('.ct-a div')], msg = el.querySelector('.ct-msg');
+    const tick = () => {
+      if (!el.isConnected) return;
+      const pad = pickPad(), pressed = [];
+      bs.forEach((b, i) => { const on = !!pad && pad.buttons.some((x, k) => FLIP(k) === i && (x.pressed || x.value > 0.5)); b.classList.toggle('on', on); if (on) pressed.push(BTNN[i]); });
+      as.forEach((a, i) => { const v = pad?.axes?.[i] || 0; a.querySelector('u').style.cssText = `left:${50 + Math.min(0, v) * 50}%;width:${Math.abs(v) * 50}%`; a.querySelector('em').textContent = v.toFixed(2); });
+      const moved = pad?.axes?.some((v, i) => i < 4 && Math.abs(v) > 0.2);
+      msg.textContent = !pad ? 'Press a button on your controller' : pressed.length || moved ? `Pressed: ${pressed.join(' + ') || '(stick)'}` : 'Connected — press any button';
+      const sv = swEl.querySelector('.cstat'); if (sv) sv.innerHTML = padStatus();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    return el;
   }
   function setTab(t, keepFocus) {
     tab = t; tabsEl.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.t === t)); swEl.innerHTML = '';
@@ -503,13 +566,26 @@ export function createUI(app) {
       const hg = rowTog('Hide GUI (keep scoreboard)', OO, () => st.hideGui, (v) => { st.hideGui = v; save(); });
       rows = [q, bg, cm, fl, fr, hg]; nodes = [group('Graphics', [q, bg]), group('Camera', [cm, fl, fr]), group('Interface', [hg])];
     } else if (t === 'keyboard') {
-      nodes = [h('<div class="note">Click a key to change it (Backspace clears, Esc cancels). Changes save automatically.</div>')];
-      for (const grp of ['Driving', 'Scoring', 'Match']) { const rs = ACTIONS.filter((a) => a[2] === grp).map((a) => keyRow(a[0], a[1])); rows.push(...rs); nodes.push(group(grp, rs)); }
+      kbRows.length = 0;
+      const nb = h('<div class="notebar"><span class="kmsg"></span><span>Changes save automatically.</span></div>'); kbMsg = nb.querySelector('.kmsg'); kbNote('');
+      nodes = [nb];
+      for (const grp of GROUPS) { const rs = ACTIONS.filter((a) => a.group === grp).map(keyRow); rows.push(...rs); nodes.push(group(grp, rs)); }
     } else {
-      const pads = [...(navigator.getGamepads?.() || [])].filter(Boolean);
-      const info = (a, b) => ({ el: h(`<div class="srow"><span>${a}</span><span class="ctl" style="flex:none;color:var(--ink-2)">${b}</span></div>`) });
-      const map = [['Drive / strafe', 'Left stick'], ['Turn', 'Right stick X'], ['Intake (hold)', 'RT'], ['Score (auto tier)', 'A'], ['Drop / outtake', 'B'], ['Launch', 'X'], ['Toggle tier', 'Y'], ['Climb (hold)', 'LB'], ['Human player tube', 'RB'], ['Pause', 'Start']].map(([a, b]) => info(a, b));
-      nodes = [h(`<div class="note">${pads.length ? 'Controller detected: ' + esc(pads[0].id) : 'No controller detected. Connect one and press any button.'}</div>`), group('Gamepad (standard layout)', map)];
+      padRows.length = 0;
+      const pc = st.padCfg, setc = (k, v) => { pc[k] = v; save(); };
+      const nb = h('<div class="notebar"><span class="pmsg">Click a row, then press a controller button or push a stick.</span><span>Changes save automatically.</span></div>');
+      const pnote = (t) => { nb.querySelector('.pmsg').textContent = t || 'Click a row, then press a controller button or push a stick.'; };
+      const stat = { el: h(`<div class="srow"><span>Controller</span><span class="ctl cstat" style="flex:none;color:var(--ink-2)">${padStatus()}</span></div>`) };
+      const dev = rowTog('Device', [{ v: 'auto', t: 'Auto' }, { v: 0, t: '1' }, { v: 1, t: '2' }, { v: 2, t: '3' }, { v: 3, t: '4' }], () => pc.device, (v) => setc('device', v));
+      const fab = rowTog('Flip A/B', OO, () => pc.flipAB, (v) => setc('flipAB', v)), fxy = rowTog('Flip X/Y', OO, () => pc.flipXY, (v) => setc('flipXY', v));
+      const dz = rowSlider('Stick deadzone', 0, 40, 1, () => pc.deadzone, (v) => setc('deadzone', v));
+      const fine = rowSlider('Fine control (response curve)', 0, 100, 5, () => pc.fine, (v) => setc('fine', v), (v) => (v ? v + '%' : 'Off'));
+      const rum = rowSlider('Rumble strength', 0, 100, 10, () => pc.rumble, (v) => { setc('rumble', v); clearTimeout(rumT); rumT = setTimeout(() => app.onRumble?.(), 150); });
+      const srows = [stat, dev, fab, fxy, dz, fine, rum];
+      nodes = [nb, group('Device', srows), controllerTest()];
+      rows = [dev, fab, fxy, dz, fine, rum];
+      for (const grp of GROUPS) { const rs = ACTIONS.filter((a) => a.group === grp && a.pad).map((a) => padRow(a, pnote)); rows.push(...rs); nodes.push(group(grp, rs)); }
+      nodes.push(h('<div class="note">Speed 1 / 2 / 3 are keyboard only. Sticks can be bound to Drive / Turn (or any action); triggers are buttons LT / RT.</div>'));
     }
     nodes.forEach((n) => swEl.appendChild(n));
     if (sLayer) setItems(sLayer, [tabsItem, ...rows, sBack, sReset], keepFocus ? 0 : sLayer.i);
@@ -519,26 +595,44 @@ export function createUI(app) {
   // ---------- HUD ----------
   $hud.innerHTML = `<div class="sbw"><div class="sb"><div class="sbox red" id="rs">0</div><div class="sclk"><div class="t" id="clk">2:05</div><div class="ph" id="ph">READY</div></div><div class="sbox blue" id="bs">0</div></div></div>
     <div class="bl"><div class="tubes"><div class="tube"></div><div class="tube"></div></div><div class="pn" id="pn"></div><div class="pl" id="pl"></div><div class="prog"><i id="pg"></i></div></div>
-    <div class="br"><div class="hst" id="hst"></div><div class="hints" id="hints"></div></div>`;
+    <div class="br"><div class="hst" id="hst"></div><div class="hints" id="hints"></div></div>
+    <div class="stats" id="stats" hidden></div><div class="bd" id="bd" hidden></div>`;
   const $ = (id) => $hud.querySelector('#' + id);
   const PHL = { pre: 'READY', auto: 'AUTO', teleop: 'TELEOP', endgame: 'ENDGAME', post: 'ASSESSING', done: 'FINAL' };
-  const k1 = (id) => keyLabel((st.keys[id] || DEFAULT_KEYS[id])[0] || '');
-  function setHints(def) {
-    const p = def.preset, k = (a, b) => `<span><span class="kbd">${a}</span>${b}</span>`;
-    $('hints').innerHTML = [k('WASD', 'move'), k(`${k1('rotL')}/${k1('rotR')}`, 'turn'), k(k1('intake'), 'intake'), k(k1('score'), 'score'), k(k1('tier'), 'tier'), k(k1('drop'), 'drop'),
-      p.canLaunch ? k(k1('launch'), 'launch') : '', k(k1('climb'), 'climb'), k(k1('tube'), 'tube'), k(k1('camera'), 'camera'), k(k1('slot'), 'slot'), k('1-3', 'speed'), k('Esc', 'pause')].join('');
+  let hintDef = null;
+  function setHints(def, dev = 'kb') {
+    hintDef = def; hintDev = dev;
+    const KB = effectiveKeys(st.keys), PD = effectivePad(st.pad), pad = dev === 'pad';
+    const lab = (id) => (pad ? padLabel(PD[id]) : keyLabel(KB[id][0] || ''));
+    const k = (a, b) => (a ? `<span><span class="kbd">${a}</span>${b}</span>` : '');
+    const move = pad ? 'L' : ['up', 'left', 'down', 'right'].map(lab).join('');
+    $('hints').innerHTML = [k(move, 'drive'), k(pad ? 'R' : `${lab('rotL')}/${lab('rotR')}`, 'turn'), k(lab('intake'), 'intake'), k(lab('place'), 'place'), k(lab('tier'), 'tier'), k(lab('drop'), 'drop'),
+      k(lab('climb'), 'climb'), k(lab('tube'), 'request tube'), k(lab('stow'), 'stow'), k(lab('camera'), 'camera'), k(lab('slot'), 'flip cam'), pad ? '' : k('1-3', 'speed'), k(lab('pause'), 'pause'), k(lab('breakdown'), 'breakdown')].join('');
     $('pn').textContent = `${def.number} ${def.name}`;
+  }
+  const showStats = (on) => { $('stats').hidden = !on; };
+  function showBreakdown(on, f, A = 'blue') {
+    const el = $('bd'); el.hidden = !on; if (!on || !f) return;
+    const B = f.blue || {}, R = f.red || {}, g = (o, ...p) => p.reduce((a, k) => a?.[k], o) ?? 0;
+    const rows = [['floor', 'floor'], ['lower', 'lower'], ['upper', 'upper']].flatMap(([k, l]) => ['auto', 'teleop'].map((ph) => [`${ph.toUpperCase()} ${l}`, ph, k, P[k][ph]]))
+      .map(([l, ph, k, per]) => `<tr><td>${l}</td><td class="n b">${g(B, ph, k)} <span class="sub">(${g(B, ph, k) * per})</span></td><td class="n r">${g(R, ph, k)} <span class="sub">(${g(R, ph, k) * per})</span></td></tr>`).join('');
+    el.innerHTML = `<div class="bdc"><h4>Score breakdown</h4><table><tr><th></th><th class="n b">Blue</th><th class="n r">Red</th></tr>${rows}
+      <tr><td>Platform</td><td class="n b">${g(B, 'platform', 'points')}</td><td class="n r">${g(R, 'platform', 'points')}</td></tr>
+      <tr><td>Fouls received</td><td class="n b">${g(B, 'fouls', 'points')}</td><td class="n r">${g(R, 'fouls', 'points')}</td></tr>
+      <tr class="tot"><td>TOTAL</td><td class="n b">${g(B, 'total')}</td><td class="n r">${g(R, 'total')}</td></tr></table></div>`;
   }
   let lastHud = {};
   function updateHUD(d) {
     const { match, score, me, camera, tier, cap } = lastHud = d;
+    if (hintDef && (d.device || 'kb') !== hintDev) setHints(hintDef, d.device || 'kb');
+    if (d.stats && !$('stats').hidden) $('stats').textContent = `FPS ${Math.round(d.stats.fps)}  ·  SPEED ${d.stats.speed.toFixed(1)} m/s`;
     const rem = Math.max(0, Math.ceil(match?.remaining ?? 0));
     $('clk').textContent = `${Math.floor(rem / 60)}:${pad2(rem % 60)}`;
     const ph = $('ph'); ph.textContent = PHL[match?.phase] || ''; ph.classList.toggle('endgame', match?.phase === 'endgame');
     $('rs').textContent = score?.red?.total ?? 0; $('bs').textContent = score?.blue?.total ?? 0;
     $hud.querySelectorAll('.tube').forEach((t, i) => t.classList.toggle('on', i < (me?.held?.length ?? 0)));
     const a = me?.action; $('pg').style.width = a && a.duration ? `${Math.min(100, (100 * a.t) / a.duration)}%` : '0%'; $('pl').textContent = a ? a.type.toUpperCase() : '';
-    $('hst').textContent = `${(CAMNAME[camera] || camera).toUpperCase()}  ·  TIER ${(tier || 'auto').toUpperCase()}  ·  SPEED ${Math.round((cap ?? 1) * 100)}%`;
+    $('hst').textContent = `${(CAMNAME[camera] || camera).toUpperCase()}  ·  TIER ${tierLabel(tier)}  ·  SPEED ${Math.round((cap ?? 1) * 100)}%`;
   }
 
   // ---------- toasts / countdown ----------
@@ -594,8 +688,8 @@ export function createUI(app) {
 
   return {
     show, showPick: () => show('pick'), showHome: () => { hist.length = 0; show('home'); }, showSetup: () => show('setup'),
-    showHUD: (on, def) => { $hud.hidden = !on; document.body.classList.toggle('nogui', !!st.hideGui); if (on && def) setHints(def); if (!on) { $toasts.innerHTML = ''; countdown(null); } },
-    updateHUD, toast, countdown, showPause, hidePause: () => closePause(), showResults,
+    showHUD: (on, def) => { $hud.hidden = !on; document.body.classList.toggle('nogui', !!st.hideGui); if (on && def) { hintDef = def; hintDev = null; setHints(def, lastHud.device || 'kb'); } if (!on) { $toasts.innerHTML = ''; countdown(null); } },
+    updateHUD, showStats, showBreakdown, toast, countdown, showPause, hidePause: () => closePause(), showResults,
     menuOpen: () => stack.length > 0,
     error: (msg) => { const e = h(`<div class="err">${esc(msg)}</div>`); (screens.pick || document.body).appendChild(e); },
     refreshRobots,

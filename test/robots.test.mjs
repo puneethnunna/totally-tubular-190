@@ -61,4 +61,17 @@ test('pack/unpack roundtrip', () => {
   const u = unpackMesh(packMesh(r));
   for (let i = 0; i < r.positions.length; i++) assert.ok(Math.abs(u.positions[i] - r.positions[i]) < 1e-4);
 });
+test('decimation keeps a sharp-edged box silhouette (quadric placement)', () => {
+  // subdivided box 1x1x1: after clustering, bounds must stay within 1% of the original
+  const n = 40, tris = [];
+  const face = (f) => { for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const q = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]].map(([a, b]) => f(a / n, b / n));
+    tris.push(...q[0], ...q[1], ...q[2], ...q[0], ...q[2], ...q[3]); } };
+  face((u, v) => [u, v, 0]); face((u, v) => [u, v, 1]); face((u, v) => [u, 0, v]); face((u, v) => [u, 1, v]); face((u, v) => [0, u, v]); face((u, v) => [1, u, v]);
+  const d = decimate(new Float32Array(tris), 3000);
+  assert.ok(d.length / 9 <= 3000 && d.length / 9 > 300);
+  let mn = Infinity, mx = -Infinity;
+  for (const v of d) { mn = Math.min(mn, v); mx = Math.max(mx, v); }
+  assert.ok(mn > -0.01 && mx < 1.01 && mn < 0.03 && mx > 0.97, `bounds ${mn} ${mx}`);
+});
 console.log(`${n} passed`);

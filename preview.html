@@ -56,14 +56,21 @@ for (const [label, fn] of [
   ['first blue', () => r.setCameraMode('first', 'blue', 'blue-0')],
   ['first red', () => r.setCameraMode('first', 'red', 'red-0')],
   ['top', () => r.setCameraMode('top', 'blue')],
+  ['tracking on', () => r.setOptions({ driverTracking: true })], ['tracking off', () => r.setOptions({ driverTracking: false })],
+  ['robot drives', () => { drive = !drive; }],
   ['follow smooth', () => r.setOptions({ cameraFollow: 'smooth' })], ['tight', () => r.setOptions({ cameraFollow: 'tight' })], ['locked', () => r.setOptions({ cameraFollow: 'locked' })],
   ['bg on', () => r.setOptions({ background: true })], ['bg off', () => r.setOptions({ background: false })],
   ['low q', () => r.setQuality('low')], ['high q', () => r.setQuality('high')],
 ]) { const b = document.createElement('button'); b.textContent = label; b.onclick = fn; ui.append(b); }
 
+let drive = true;   // blue-0 laps the field so the driver-station tracking camera has something to follow
 function loop(ms) {
   requestAnimationFrame(loop);
   sim.state.time = ms / 1000;
+  if (drive) {
+    const t = ms / 4000, p = robots[0], nx = 6.5 * Math.sin(t), nz = 3 * Math.sin(t * 1.7);
+    p.heading = Math.atan2(nz - p.z, nx - p.x) || p.heading; p.x = nx; p.z = nz;
+  }
   robots[3].x = -3 + Math.sin(ms / 1500); robots[4].heading = 0.5 + Math.sin(ms / 1000) * 0.3;
   robots[0].armTier = tiers[Math.floor(ms / 2500) % 4]; robots[0].arm = robots[0].armTier === 'upper' ? 1 : 0.5;
   controls.enabled = r.mode === 'free';

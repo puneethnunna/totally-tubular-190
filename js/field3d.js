@@ -3,6 +3,13 @@ import { FIELD, SIDES, ALLIANCES, TUBE } from './config.js';
 import { getTubeAssets } from './models.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
+// Field palette sampled from the game CAD renders (ref/image1-3.png). Independent of robot bumper colors.
+export const PALETTE = {
+  carpet: '#898989', blue: '#0000e4', red: '#e40000', structure: '#909090', post: '#595959',
+  shelf: '#b0bbc2', shelfFloor: '#7e8a92', chute: '#858585', peg: '#afbac2',
+};
+export const FIELD_COLOR = { blue: PALETTE.blue, red: PALETTE.red };
+
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.05, ...o });
 const glass = (color, op) => std(color, { transparent: true, opacity: op, roughness: 0.15, metalness: 0.1, depthWrite: false });
 const lighten = (c, f) => new THREE.Color(c).lerp(new THREE.Color(0xffffff), f);
@@ -92,26 +99,29 @@ const FIELD_URL = new URL('../assets/field.bin', import.meta.url);
 const CLEAR = new Set(['endwall', 'sidewall']);
 
 function fieldMaterials() {
-  const alu = (c = 0xc3c8cf) => new THREE.MeshStandardMaterial({ color: c, metalness: 0.55, roughness: 0.42 });
-  const clear = (c, op) => new THREE.MeshPhysicalMaterial({
+  // frsim-style presets: metals get the env map, painted/plastic parts stay matte.
+  const alu = (c, rough = 0.34, env = 0.9) => new THREE.MeshStandardMaterial({ color: c, metalness: 0.9, roughness: rough, envMapIntensity: env });
+  const coat = (c, rough = 0.68, env = 0.35) => new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: rough, envMapIntensity: env });
+  const clear = (c, op) => new THREE.MeshPhysicalMaterial({   // polycarbClear
     color: c, transparent: true, opacity: op, roughness: 0.06, metalness: 0, ior: 1.5, reflectivity: 0.6,
     clearcoat: 0.6, clearcoatRoughness: 0.05, envMapIntensity: 1.3, depthWrite: false, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
   });
-  const ally = (a, f = 0) => std(lighten(SIDES[a].color, f), { roughness: 0.55 });
+  const hdpe = (a, f = 0) => coat(new THREE.Color(PALETTE[a]).multiplyScalar(1.12 + f), 0.7, 0.1);   // HDPE-like low-gloss platform / wall plastic
+  const apron = (a) => coat(new THREE.Color(PALETTE[a]).multiplyScalar(0.5), 0.6, 0.4);
   return {
-    structure: alu(0xbfc4cb),
-    rail: alu(0xd2d6dc),
-    floor: new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 1, side: THREE.DoubleSide }),
-    base: std(0x23262d, { roughness: 0.95 }),
-    chute: std(0x3f4349, { roughness: 0.6, metalness: 0.15 }),
-    postwall: std(0x3a3d43, { roughness: 0.6, metalness: 0.1 }),
-    endwall: clear(0xcfe3ee, 0.2),
+    structure: alu(PALETTE.structure, 0.36, 0.8),
+    rail: alu(PALETTE.structure, 0.30, 0.9),
+    floor: new THREE.MeshStandardMaterial({ map: floorTexture(), bumpMap: fiberBump(), bumpScale: 0.6, roughness: 0.96, metalness: 0, envMapIntensity: 0.3, side: THREE.DoubleSide }),
+    base: coat(0x23262d, 0.95, 0.1),
+    chute: coat(PALETTE.chute, 0.6, 0.45),
+    postwall: coat(PALETTE.post, 0.68, 0.35),
+    endwall: clear(PALETTE.shelf, 0.42),
     sidewall: clear(0xd8e8f0, 0.16),
-    post: new THREE.MeshStandardMaterial({ color: 0xe3e6ea, metalness: 0.9, roughness: 0.25 }),
-    ...Object.fromEntries(['blue', 'red'].flatMap((a) => [2, 3, 4].map((L) => [`platform-${a}-${L}`, ally(a, 0.06 + (L - 2) * 0.16)]))),
-    'wall-blue': ally('blue'), 'wall-red': ally('red'),
-    'station-blue': std(new THREE.Color(SIDES.blue.color).multiplyScalar(0.5), { roughness: 0.6, metalness: 0.2 }),
-    'station-red': std(new THREE.Color(SIDES.red.color).multiplyScalar(0.5), { roughness: 0.6, metalness: 0.2 }),
+    post: new THREE.MeshStandardMaterial({ color: 0xcfd2d6, metalness: 1, roughness: 0.26, envMapIntensity: 1 }),   // steelZinc
+    ...Object.fromEntries(['blue', 'red'].flatMap((a) => [2, 3, 4].map((L) => [`platform-${a}-${L}`, hdpe(a)]))),
+    'wall-blue': hdpe('blue'), 'wall-red': hdpe('red'),
+    'station-blue': apron('blue'), 'station-red': apron('red'),
   };
 }
 
@@ -134,12 +144,28 @@ function longWallFrame() {
     // mid-span uprights on the long low sections so the panels read as framed lites
     for (const [a, b, h] of segs) if (b - a > 3.2) for (let k = 1; k < Math.round((b - a) / 1.6); k++) { const x = a + ((b - a) * k) / Math.round((b - a) / 1.6); bx(0.05, h, 0.09, x, h / 2, z); }
   }
-  const m = new THREE.Mesh(mergeGeometries(parts), new THREE.MeshStandardMaterial({ color: 0xd5d9df, metalness: 0.6, roughness: 0.38 }));
+  const m = new THREE.Mesh(mergeGeometries(parts), new THREE.MeshStandardMaterial({ color: 0xc9ccd1, metalness: 0.9, roughness: 0.34, envMapIntensity: 0.9 }));
   m.name = 'long-wall-frame'; m.castShadow = true; m.receiveShadow = true;
   return m;
 }
 
-// Paints the zones onto the CAD carpet face. UV (0,0) is the field corner at (-halfL, -halfW).
+function noiseCanvas(n, amp, base) {
+  const c = document.createElement('canvas'); c.width = c.height = n;
+  const g = c.getContext('2d'), d = g.createImageData(n, n);
+  for (let i = 0; i < d.data.length; i += 4) { const v = base + (Math.random() - 0.5) * amp; d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255; }
+  g.putImageData(d, 0, 0);
+  return c;
+}
+
+// Tiled carpet-fiber bump (own repeat, independent of the painted-zone map).
+function fiberBump() {
+  const t = new THREE.CanvasTexture(noiseCanvas(256, 255, 128));
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(FIELD.length / 0.6, FIELD.width / 0.6); t.anisotropy = 4;
+  return t;
+}
+
+// Paints the zones onto the CAD carpet face, plus baked contact shadows under walls/platforms.
+// UV (0,0) is the field corner at (-halfL, -halfW).
 function floorTexture() {
   const W = 4096, H = Math.round(W * FIELD.width / FIELD.length), k = W / FIELD.length;
   const c = document.createElement('canvas'); c.width = W; c.height = H;
@@ -150,20 +176,76 @@ function floorTexture() {
     R({ x0, x1, z0, z1: z0 + w }, col); R({ x0, x1, z0: z1 - w, z1 }, col);
     R({ x0, x1: x0 + w, z0, z1 }, col); R({ x0: x1 - w, x1, z0, z1 }, col);
   };
-  g.fillStyle = '#8a8d92'; g.fillRect(0, 0, W, H);
-  const n = g.getImageData(0, 0, W, H);
-  for (let i = 0; i < n.data.length; i += 4) { const d = (Math.random() - 0.5) * 16; n.data[i] += d; n.data[i + 1] += d; n.data[i + 2] += d; }
-  g.putImageData(n, 0, 0);
+  g.fillStyle = PALETTE.carpet; g.fillRect(0, 0, W, H);
+  g.globalCompositeOperation = 'overlay'; g.globalAlpha = 0.2;
+  g.fillStyle = g.createPattern(noiseCanvas(256, 255, 128), 'repeat'); g.fillRect(0, 0, W, H);
+  g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
   for (const a of ALLIANCES) {
-    const S = SIDES[a], col = '#' + new THREE.Color(S.color).getHexString();
+    const S = SIDES[a], col = FIELD_COLOR[a];
     R(S.loadingZone, col);
     R(S.floorArea, col);
     tapeIn(S.scoringZone, col);
     tapeIn(S.platformZone, col);
   }
+  // contact shadows: blurred dark halos around everything that stands on the carpet (the rects themselves are drawn off-canvas)
+  const halo = (r, blur, a) => {
+    g.save(); g.shadowColor = `rgba(0,0,0,${a})`; g.shadowBlur = blur * k; g.shadowOffsetX = 100000;
+    g.fillStyle = '#000'; g.fillRect((r.x0 + FIELD.halfL) * k - 100000, (r.z0 + FIELD.halfW) * k, (r.x1 - r.x0) * k, (r.z1 - r.z0) * k); g.restore();
+  };
+  for (const a of ALLIANCES) {
+    const S = SIDES[a];
+    for (const p of S.platforms) { halo(p, 0.22, 0.55); halo(p, 0.06, 0.5); }
+    halo(S.shortWall, 0.14, 0.5);
+    const e = Math.sign(S.driverStationX);
+    halo({ x0: e * FIELD.halfL - 0.05, x1: e * FIELD.halfL + 0.05, z0: -FIELD.halfW, z1: FIELD.halfW }, 0.3, 0.6);
+  }
+  for (const s of [-1, 1]) halo({ x0: -FIELD.halfL, x1: FIELD.halfL, z0: s * FIELD.halfW - 0.03, z1: s * FIELD.halfW + 0.03 }, 0.14, 0.4);
   const t = new THREE.CanvasTexture(c);
   t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
   return t;
+}
+
+// Creased normals straight from the welded indexed mesh: each corner averages the (area-weighted) normals of the
+// faces around its vertex that lie within the crease angle, so pegs/cutouts/frames shade smooth while box edges
+// stay crisp. Output is non-indexed (triangle order preserved, so index ranges double as vertex ranges).
+function creasedGeometry(pos, idx, creaseDeg = 30) {
+  const nT = idx.length / 3, cosT = Math.cos(THREE.MathUtils.degToRad(creaseDeg));
+  const fn = new Float32Array(nT * 3), fa = new Float32Array(nT), nV = pos.length / 3;
+  const cnt = new Uint32Array(nV + 1);
+  for (let t = 0; t < nT; t++) {
+    const a = idx[t * 3] * 3, b = idx[t * 3 + 1] * 3, c = idx[t * 3 + 2] * 3;
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+    const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+    let x = uy * vz - uz * vy, y = uz * vx - ux * vz, z = ux * vy - uy * vx;
+    const l = Math.hypot(x, y, z);
+    if (l < 1e-12) { y = 1; fa[t] = 0; } else { x /= l; y /= l; z /= l; fa[t] = l; }
+    fn[t * 3] = x; fn[t * 3 + 1] = y; fn[t * 3 + 2] = z;
+    cnt[idx[t * 3] + 1]++; cnt[idx[t * 3 + 1] + 1]++; cnt[idx[t * 3 + 2] + 1]++;
+  }
+  for (let i = 0; i < nV; i++) cnt[i + 1] += cnt[i];
+  const fill = cnt.slice(0, nV), adj = new Uint32Array(nT * 3);
+  for (let t = 0; t < nT; t++) for (let k = 0; k < 3; k++) adj[fill[idx[t * 3 + k]]++] = t;
+  const P = new Float32Array(nT * 9), N = new Float32Array(nT * 9), UV = new Float32Array(nT * 6);
+  for (let t = 0; t < nT; t++) {
+    const tx = fn[t * 3], ty = fn[t * 3 + 1], tz = fn[t * 3 + 2];
+    for (let k = 0; k < 3; k++) {
+      const v = idx[t * 3 + k]; let x = 0, y = 0, z = 0;
+      for (let j = cnt[v]; j < cnt[v + 1]; j++) {
+        const f = adj[j], w = fa[f];
+        if (f === t || tx * fn[f * 3] + ty * fn[f * 3 + 1] + tz * fn[f * 3 + 2] >= cosT) { x += fn[f * 3] * w; y += fn[f * 3 + 1] * w; z += fn[f * 3 + 2] * w; }
+      }
+      const l = Math.hypot(x, y, z) || 1, o = (t * 3 + k) * 3;
+      N[o] = x / l; N[o + 1] = y / l; N[o + 2] = z / l;
+      P[o] = pos[v * 3]; P[o + 1] = pos[v * 3 + 1]; P[o + 2] = pos[v * 3 + 2];
+      UV[(t * 3 + k) * 2] = (P[o] + FIELD.halfL) / FIELD.length;           // top-down projection, only the floor samples it
+      UV[(t * 3 + k) * 2 + 1] = (P[o + 2] + FIELD.halfW) / FIELD.width;
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(UV, 2));
+  return g;
 }
 
 export async function loadFieldModel(url = FIELD_URL) {
@@ -177,35 +259,19 @@ export async function loadFieldModel(url = FIELD_URL) {
   for (let i = 0; i < q.length; i++) pos[i] = q[i] * head.scale;
   const idxOff = 8 + hlen + q.byteLength + (q.byteLength % 4);
   const idx = new Uint32Array(buf, idxOff, head.tris * 3);
-  const full = new THREE.BufferGeometry();
-  full.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  const uv = new Float32Array(head.verts * 2);   // top-down projection, only the floor material samples it
-  for (let i = 0; i < head.verts; i++) {
-    uv[i * 2] = (pos[i * 3] + FIELD.halfL) / FIELD.length;
-    uv[i * 2 + 1] = (pos[i * 3 + 2] + FIELD.halfW) / FIELD.width;
-  }
-  full.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  full.setIndex(new THREE.BufferAttribute(idx, 1));
-  full.computeVertexNormals();   // flat-shaded parts ignore these; the floor (no flat shading) is fixed below
-  const nrm = full.getAttribute('normal');
-  for (const [name, start, count] of head.groups) if (name === 'floor' || name === 'base')
-    for (let i = start; i < start + count; i++) nrm.setXYZ(idx[i], 0, 1, 0);
-
   const mats = fieldMaterials();
-  const out = new THREE.Group(); out.name = 'field-cad';
+  const out = new THREE.Group(); out.name = 'field-cad'; out.userData.mats = mats;
   for (const clearPass of [false, true]) {
     const list = [], chunks = [], groups = []; let n = 0;
     for (const [name, start, count] of head.groups) {
       if (CLEAR.has(name) !== clearPass) continue;
-      const m = mats[name] || mats.structure; if (name !== 'floor') m.flatShading = true;
+      const m = mats[name] || mats.structure;
       let i = list.indexOf(m); if (i < 0) i = list.push(m) - 1;
       chunks.push(idx.subarray(start, start + count)); groups.push([n, count, i]); n += count;
     }
     if (!n) continue;
     const ia = new Uint32Array(n); let o = 0; for (const c of chunks) { ia.set(c, o); o += c.length; }
-    const geo = new THREE.BufferGeometry();
-    for (const k of ['position', 'uv', 'normal']) geo.setAttribute(k, full.getAttribute(k));
-    geo.setIndex(new THREE.BufferAttribute(ia, 1));
+    const geo = creasedGeometry(pos, ia, 30);
     for (const [st, c, mi] of groups) geo.addGroup(st, c, mi);
     geo.computeBoundingSphere();
     const mesh = new THREE.Mesh(geo, list);
@@ -224,7 +290,7 @@ export function buildField(scene) {
   const wallGl = glass(0xe9f1f6, 0.38);
 
   // ground beyond field + carpet
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), std(0x2a2e38, { roughness: 0.95 }));
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), std(0x1a1d25, { roughness: 1, envMapIntensity: 0.1 }));
   ground.rotation.x = -Math.PI / 2; ground.position.y = -0.03; ground.receiveShadow = true;
   group.add(ground);
   // Everything in standIn is a procedural copy shown until the CAD model loads (or if it can't).
@@ -246,7 +312,7 @@ export function buildField(scene) {
 
   const post = {};
   for (const a of ALLIANCES) {
-    const S = SIDES[a], col = S.color;
+    const S = SIDES[a], col = FIELD_COLOR[a];
     const solid = std(col, { roughness: 0.65 });
     const tp = std(col, { roughness: 0.6 });
     const dim = std(lighten(col, -0.0).multiplyScalar(0.55), { roughness: 0.6 });
@@ -287,7 +353,7 @@ export function buildField(scene) {
   // far walls + end curtains stay well outside the field
   for (const s of [-1, 1]) {
     stands.add(box(60, 11, 0.5, std(0x151822, { roughness: 0.9 }), 0, 5.5, s * 17));
-    stands.add(box(60, 0.9, 0.52, std(SIDES[s < 0 ? 'blue' : 'red'].color, { roughness: 0.6 }), 0, 7.2, s * 16.7));
+    stands.add(box(60, 0.9, 0.52, std(s < 0 ? FIELD_COLOR.blue : FIELD_COLOR.red, { roughness: 0.6 }), 0, 7.2, s * 16.7));
     stands.add(box(0.5, 11, 36, std(0x12141c, { roughness: 0.9 }), s * 27, 5.5, 0, false));
   }
 

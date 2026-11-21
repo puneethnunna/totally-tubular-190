@@ -28,22 +28,104 @@ const PHYS = {
   response: 0.08, kv: 12, kw: 20,                   // module response (s); velocity / yaw-rate loop gains (1/s)
   alpha: 4, tankAlpha: 3.5, moduleR: 0.8,           // yaw accel per rad/s of turnRate; wheel radius from center (x R)
   crr: 0.02,                                        // rolling resistance coefficient
-  robotRest: 0.15, robotMu: 0.35, wallRest: 0.15, wallMu: 0.3, restV: 0.4, slop: 0.003,
+  robotMu: 0.35, wallMu: 0.3, restV: 0.4,           // robot/wall contacts are fully inelastic: they stop, never bounce
+  robotH: 0.8, maxStep: 0.08,                       // robot height (tubes fly over it), max robot travel per substep (m)
   tubeRest: 0.4, tubeWallRest: 0.4, tubeRobotRest: 0.3, tubeVisc: 1.4, tubeCrr: 0.5, tubeSpinDecay: 3,
   drag: 0.09, floorBounce: 0.35,                    // tube quadratic air drag (1/m), floor bounce in flight
 };
 
-// circle vs rect -> [nx, nz, penetration] pointing out of the rect, or null
-function circleRect(x, z, r, q) {
+// circle vs rect -> [nx, nz, penetration] pointing out of the rect, or null.
+// With the previous (valid) position (ox, oz), the side the body came from wins, so a push can't carry it through a thin wall.
+function circleRect(x, z, r, q, ox, oz) {
   const px = clamp(x, q.x0, q.x1), pz = clamp(z, q.z0, q.z1);
   const dx = x - px, dz = z - pz, d2 = dx * dx + dz * dz;
   if (d2 >= r * r) return null;
-  if (d2 > 1e-12) { const d = Math.sqrt(d2); return [dx / d, dz / d, r - d]; }
-  const l = x - q.x0, rr = q.x1 - x, t = z - q.z0, b = q.z1 - z, m = Math.min(l, rr, t, b);
-  if (m === l) return [-1, 0, l + r];
-  if (m === rr) return [1, 0, rr + r];
-  if (m === t) return [0, -1, t + r];
-  return [0, 1, b + r];
+  let n;
+  if (d2 > 1e-12) { const d = Math.sqrt(d2); n = [dx / d, dz / d, r - d]; }
+  else {
+    const l = x - q.x0, rr = q.x1 - x, t = z - q.z0, b = q.z1 - z, m = Math.min(l, rr, t, b);
+    n = m === l ? [-1, 0, l + r] : m === rr ? [1, 0, rr + r] : m === t ? [0, -1, t + r] : [0, 1, b + r];
+  }
+  if (ox === undefined) return n;
+  const cx = clamp(ox, q.x0, q.x1), cz = clamp(oz, q.z0, q.z1), ex = ox - cx, ez = oz - cz, e = Math.hypot(ex, ez);
+  if (e < 1e-9) return n;
+  const nx = ex / e, nz = ez / e;
+  if (n[0] * nx + n[1] * nz > 0) return n;
+  const pen = r - ((x - cx) * nx + (z - cz) * nz);
+  return pen > 0 ? [nx, nz, pen] : n;
+}
+
+// ---- bumper colliders: every robot is a rounded rectangle = core rectangle (ax, az) swept by a corner radius m ----
+// Shape S = { x, z, c, s (heading cos/sin), ax, az, m, rr (circumscribed) }. Static AABBs are shapes with m = 0; contacts are
+// found by SAT on the cores (cores overlapping) or closest vertex-to-core distance (cores apart, margin contact).
+const rectShape = (q) => { const ax = (q.x1 - q.x0) / 2, az = (q.z1 - q.z0) / 2; return { x: (q.x0 + q.x1) / 2, z: (q.z0 + q.z1) / 2, c: 1, s: 0, ax, az, m: 0, rr: Math.hypot(ax, az) }; };
+const _a = new Float64Array(8), _b = new Float64Array(8), _cand = new Float64Array(24), _cp = [0, 0];
+function corners(S, o) {
+  const ux = S.c * S.ax, uz = S.s * S.ax, vx = -S.s * S.az, vz = S.c * S.az;
+  o[0] = S.x + ux + vx; o[1] = S.z + uz + vz; o[2] = S.x + ux - vx; o[3] = S.z + uz - vz;
+  o[4] = S.x - ux - vx; o[5] = S.z - uz - vz; o[6] = S.x - ux + vx; o[7] = S.z - uz + vz;
+}
+function closest(S, px, pz) { // nearest point of S's core to (px, pz) -> _cp
+  const dx = px - S.x, dz = pz - S.z, lx = clamp(dx * S.c + dz * S.s, -S.ax, S.ax), lz = clamp(-dx * S.s + dz * S.c, -S.az, S.az);
+  _cp[0] = S.x + lx * S.c - lz * S.s; _cp[1] = S.z + lx * S.s + lz * S.c;
+}
+const insideCore = (S, px, pz) => { const dx = px - S.x, dz = pz - S.z; return Math.abs(dx * S.c + dz * S.s) <= S.ax && Math.abs(-dx * S.s + dz * S.c) <= S.az; };
+// A vs B -> o = { nx, nz (A -> B), pen, px, pz (contact point) } or false. e = extra margin for proximity tests.
+function contact(A, B, o, e = 0) {
+  const dx = B.x - A.x, dz = B.z - A.z, m = A.m + B.m + e, br = A.rr + B.rr + e;
+  if (dx * dx + dz * dz >= br * br) return false;
+  let mg = -1e9, mx = 0, mz = 0;
+  for (let i = 0; i < 4; i++) {
+    const S = i < 2 ? A : B, nx = i & 1 ? -S.s : S.c, nz = i & 1 ? S.c : S.s;
+    const pa = A.ax * Math.abs(nx * A.c + nz * A.s) + A.az * Math.abs(-nx * A.s + nz * A.c);
+    const pb = B.ax * Math.abs(nx * B.c + nz * B.s) + B.az * Math.abs(-nx * B.s + nz * B.c);
+    const dd = dx * nx + dz * nz, g = Math.abs(dd) - pa - pb;
+    if (g >= m) return false;
+    if (g > mg) { mg = g; mx = dd < 0 ? -nx : nx; mz = dd < 0 ? -nz : nz; }
+  }
+  if (mg < 0) { // cores overlap: push out along the shallowest axis; contact = middle of the corners lying inside the other core
+    corners(A, _a); corners(B, _b);
+    let n = 0, sx = 0, sz = 0;
+    for (let i = 0; i < 8; i += 2) {
+      if (insideCore(B, _a[i], _a[i + 1])) { sx += _a[i]; sz += _a[i + 1]; n++; }
+      if (insideCore(A, _b[i], _b[i + 1])) { sx += _b[i]; sz += _b[i + 1]; n++; }
+    }
+    o.nx = mx; o.nz = mz; o.pen = m - mg;
+    o.px = n ? sx / n : (A.x + B.x) / 2; o.pz = n ? sz / n : (A.z + B.z) / 2;
+    return true;
+  }
+  corners(A, _a); corners(B, _b);
+  let nc = 0, dmin = 1e9;
+  for (let i = 0; i < 8; i += 2) {
+    closest(B, _a[i], _a[i + 1]); const d = Math.hypot(_cp[0] - _a[i], _cp[1] - _a[i + 1]);
+    _cand[nc * 3] = d; _cand[nc * 3 + 1] = (_a[i] + _cp[0]) / 2; _cand[nc * 3 + 2] = (_a[i + 1] + _cp[1]) / 2; nc++; if (d < dmin) dmin = d;
+    closest(A, _b[i], _b[i + 1]); const d2 = Math.hypot(_cp[0] - _b[i], _cp[1] - _b[i + 1]);
+    _cand[nc * 3] = d2; _cand[nc * 3 + 1] = (_b[i] + _cp[0]) / 2; _cand[nc * 3 + 2] = (_b[i + 1] + _cp[1]) / 2; nc++; if (d2 < dmin) dmin = d2;
+  }
+  if (dmin >= m) return false;
+  // normal from the closest vertex pair (axis normal when cores touch exactly)
+  let bi = 0; for (let i = 1; i < nc; i++) if (_cand[i * 3] < _cand[bi * 3]) bi = i;
+  const vi = bi >> 1 << 1, isA = (bi & 1) === 0, vx = isA ? _a[vi] : _b[vi], vz = isA ? _a[vi + 1] : _b[vi + 1];
+  if (dmin > 1e-9) { closest(isA ? B : A, vx, vz); const k = isA ? 1 : -1; o.nx = k * (_cp[0] - vx) / dmin; o.nz = k * (_cp[1] - vz) / dmin; }
+  else { o.nx = mx; o.nz = mz; }
+  o.pen = m - dmin;
+  let sx = 0, sz = 0, n = 0;
+  for (let i = 0; i < nc; i++) if (_cand[i * 3] < dmin + 0.002) { sx += _cand[i * 3 + 1]; sz += _cand[i * 3 + 2]; n++; }
+  o.px = sx / n + o.nx * (A.m - B.m) / 2; o.pz = sz / n + o.nz * (A.m - B.m) / 2;
+  return true;
+}
+// circle vs bumper shape -> [nx, nz (shape -> circle), pen] or null
+function circleShape(x, z, R, S) {
+  const dx = x - S.x, dz = z - S.z, lx = dx * S.c + dz * S.s, lz = -dx * S.s + dz * S.c, rr = R + S.m;
+  const ex = lx - clamp(lx, -S.ax, S.ax), ez = lz - clamp(lz, -S.az, S.az), d2 = ex * ex + ez * ez;
+  if (d2 >= rr * rr) return null;
+  let nx, nz, pen;
+  if (d2 > 1e-12) { const d = Math.sqrt(d2); nx = ex / d; nz = ez / d; pen = rr - d; }
+  else {
+    const gx = S.ax - Math.abs(lx), gz = S.az - Math.abs(lz);
+    if (gx < gz) { nx = Math.sign(lx) || 1; nz = 0; pen = gx + rr; } else { nx = 0; nz = Math.sign(lz) || 1; pen = gz + rr; }
+  }
+  return [nx * S.c - nz * S.s, nx * S.s + nz * S.c, pen];
 }
 
 export function createSim(options = {}) {
@@ -65,14 +147,15 @@ export function createSim(options = {}) {
   });
   const platforms = ALLIANCES.flatMap((a) => SIDES[a].platforms.map((p) => ({ ...p, alliance: a, id: `${a}-L${p.level}` })));
   const platRects = platforms;
-  const obstacles = [...walls, ...postRails, ...platRects];
+  const obstacles = [...walls, ...postRails, ...platRects], obsShapes = obstacles.map(rectShape);
+  const solids = [...walls, ...platRects]; // tall enough to stop a tube in flight (postRails: tubes pass under the pegs)
 
   const tubes = [];
   const tubeById = new Map();
   let tubeSeq = 0;
   function newTube(origin, x, z, state = 'floor') {
     const t = { id: `t${tubeSeq++}`, origin, x, y: TR, z, vx: 0, vy: 0, vz: 0, state, holder: null, post: null,
-      stackIndex: -1, placedInAuto: false, yaw: 0, spin: 0, lockT: 0, chuteT: 0, moving: false, flight: null };
+      px: x, pz: z, sx: undefined, sz: 0, stackIndex: -1, placedInAuto: false, yaw: 0, spin: 0, lockT: 0, chuteT: 0, moving: false, flight: null };
     tubes.push(t); tubeById.set(t.id, t);
     return t;
   }
@@ -86,13 +169,17 @@ export function createSim(options = {}) {
     const op = typeof o.preset === 'object' && o.preset ? o.preset : null;
     const base = ROBOT_PRESETS.find((p) => p.id === (op ? op.id : o.preset)) ?? ROBOT_PRESETS[0];
     const preset = { ...base, ...op, radius: op?.radius > 0 ? op.radius : PHYS.radius, mass: op?.mass > 0 ? op.mass : PHYS.mass };
-    const mass = preset.mass, radius = preset.radius;
+    const mass = preset.mass, fp = preset.model?.footprint, b0 = fp ? Math.min(ROBOT.bumper, 0.09) : ROBOT.bumper; // same outline as models.js createBumper
+    const bm = preset.bumper ?? (fp ? { lx: fp.x + 2 * b0, lz: fp.z + 2 * b0 } : { lx: 2 * preset.radius, lz: 2 * preset.radius });
+    const hx = bm.lx / 2, hz = bm.lz / 2, corner = bm.corner ?? Math.min(0.06, bm.lx / 3, bm.lz / 3);
+    const radius = Math.hypot(hx - corner, hz - corner) + corner; // circumscribed
     const st = o.start ?? SIDES[o.alliance].starts[o.slot ?? 0] ?? SIDES[o.alliance].starts[0];
-    const r = { id: o.id, alliance: o.alliance, slot: o.slot ?? 0, number: o.number ?? '', preset, radius, mass, inertia: PHYS.inertiaK * mass * radius * radius,
+    const r = { id: o.id, alliance: o.alliance, slot: o.slot ?? 0, number: o.number ?? '', preset, radius, bumper: { lx: 2 * hx, lz: 2 * hz, corner }, mass, inertia: PHYS.inertiaK * mass * (hx * hx + hz * hz) / 2,
       x: st.x, z: st.z, y: 0, heading: st.heading ?? 0, vx: 0, vz: 0, omega: 0, held: [], action: null,
       arm: 0, armTier: 'stow', support: 0, intakeOn: false, contacts: [] };
     robots.push(r); robotById.set(r.id, r);
-    rt.set(r.id, { cx: 0, cz: 0, cr: 0, cth: 0, ctu: 0, platform: null, intakeT: 0, intakeTarget: null, touching: new Set(), prevClimb: false, act: null });
+    rt.set(r.id, { hx, R0: Math.hypot(hx, hz) / Math.SQRT2, sh: { x: 0, z: 0, c: 1, s: 0, ax: hx - corner, az: hz - corner, m: corner, rr: radius, ex: 0, ez: 0 }, cx: 0, cz: 0, cr: 0, cth: 0, ctu: 0, platform: null, intakeT: 0, intakeTarget: null, touching: new Set(), prevClimb: false, act: null });
+    pose(r);
     if (o.preload !== false) {
       const t = newTube(r.alliance, r.x, r.z, 'held');
       t.holder = r.id; r.held.push(t.id); preloads[r.alliance]++;
@@ -118,6 +205,14 @@ export function createSim(options = {}) {
   let first = true;
 
   // ---------- helpers ----------
+  const clampIn = (v, lo, hi) => (lo > hi ? (lo + hi) / 2 : clamp(v, lo, hi));
+  function sh(r) { // bumper shape synced to the robot's current pose
+    const S = rt.get(r.id).sh; S.x = r.x; S.z = r.z; return S;
+  }
+  function pose(r) { // heading changed: refresh rotation and axis-aligned half extents
+    const S = rt.get(r.id).sh, c = Math.cos(r.heading), s = Math.sin(r.heading);
+    S.c = c; S.s = s; S.ex = S.ax * Math.abs(c) + S.az * Math.abs(s) + S.m; S.ez = S.ax * Math.abs(s) + S.az * Math.abs(c) + S.m;
+  }
   const postStackPos = (p, idx) => ({ x: p.tipX - p.dirX * TIP_SPACING * idx, y: p.y, z: p.z });
   const speed2 = (o) => o.vx * o.vx + o.vz * o.vz;
 
@@ -150,7 +245,7 @@ export function createSim(options = {}) {
       if (Math.abs(wrap(r.heading - wallAng)) > TUNE.placeAngle) continue;
       const dx = p.tipX - r.x, dz = p.z - r.z;
       const f = dx * c + dz * s, l = -dx * s + dz * c;
-      if (f <= 0 || f - r.radius > TUNE.reach || Math.abs(l) > TUNE.placeLateral) continue;
+      if (f <= 0 || f - rt.get(r.id).hx > TUNE.reach || Math.abs(l) > TUNE.placeLateral) continue;
       const sc = Math.abs(f - r.radius) + 2 * Math.abs(l);
       if (sc < bs) { bs = sc; best = p; }
     }
@@ -201,7 +296,7 @@ export function createSim(options = {}) {
   function doLaunch(r) {
     const t = tubeById.get(r.held[0]);
     const c = Math.cos(r.heading), s = Math.sin(r.heading);
-    const x0 = r.x + c * (r.radius + 0.1), z0 = r.z + s * (r.radius + 0.1), y0 = r.y + 0.9;
+    const hx = rt.get(r.id).hx, x0 = r.x + c * (hx + 0.1), z0 = r.z + s * (hx + 0.1), y0 = r.y + 0.9;
     release(t);
     Object.assign(t, { state: 'flight', x: x0, y: y0, z: z0, placedInAuto: false, post: null });
     const p = r.action.target ? postById.get(r.action.target) : null;
@@ -216,7 +311,8 @@ export function createSim(options = {}) {
     }
     const D = Math.hypot(tx - x0, tz - z0), k0 = PHYS.drag;
     const vy = (ty - y0 + 0.5 * G * T * T) / T;
-    t.flight = { t: 0, T, x0, y0, z0, tx, ty, tz, vy, post: p ? p.id : null };
+    t.sx = r.x; t.sz = r.z; // spawn point may be inside a wall: resolve from the robot's side
+    t.flight = { src: r.id, t: 0, T, x0, y0, z0, tx, ty, tz, vy, post: p ? p.id : null };
     const vk = p || D < 1e-6 ? 1 : (Math.exp(k0 * D) - 1) / (k0 * D); // free throws: start faster to offset air drag
     t.vx = ((tx - x0) / T) * vk; t.vz = ((tz - z0) / T) * vk; t.vy = vy; t.spin = (rnd() - 0.5) * 6;
     emit({ type: 'launch', robotId: r.id, tubeId: t.id, postId: p ? p.id : undefined });
@@ -230,7 +326,7 @@ export function createSim(options = {}) {
       if (q.alliance !== r.alliance || q.level !== need) continue;
       const px = clamp(r.x, q.x0, q.x1), pz = clamp(r.z, q.z0, q.z1);
       const dx = px - r.x, dz = pz - r.z, d = Math.hypot(dx, dz);
-      if (d > r.radius + TUNE.climbTouch) continue;
+      closest(sh(r), px, pz); if (Math.hypot(_cp[0] - px, _cp[1] - pz) - r.bumper.corner > TUNE.climbTouch) continue; // bumper-to-platform gap
       if (d > 1e-6 && Math.abs(wrap(Math.atan2(dz, dx) - r.heading)) > TUNE.climbAngle) continue;
       return q;
     }
@@ -240,10 +336,9 @@ export function createSim(options = {}) {
   function startClimb(r, k) {
     const q = findClimbTarget(r, k);
     if (!q) return;
-    const R = r.radius;
-    const tx = clamp(r.x, q.x0 + R, q.x1 - R), tz = clamp(r.z, q.z0 + R, q.z1 - R);
+    const S = sh(r), tx = clampIn(r.x, q.x0 + S.ex, q.x1 - S.ex), tz = clampIn(r.z, q.z0 + S.ez, q.z1 - S.ez);
     const open = q.z1 < 0 ? q.z1 : q.z0; // open edge faces field center
-    const cz = q.z1 < 0 ? Math.min(tz, open - R) : Math.max(tz, open + R);
+    const cz = q.z1 < 0 ? Math.min(tz, open - S.ez) : Math.max(tz, open + S.ez);
     r.action = { type: 'climb', t: 0, duration: r.preset.climbTime, target: q.id };
     k.act = { q, fx: r.x, fz: r.z, fy: r.y, tx, tz: cz };
     r.armTier = 'stow';
@@ -285,7 +380,7 @@ export function createSim(options = {}) {
     const a0 = p.turnRate * (tank ? PHYS.tankAlpha : PHYS.alpha), sw = Math.sign(ew);
     al = Math.min(Math.abs(ew) * (ew * r.omega < 0 ? 1 / dt : PHYS.kw), a0 * clamp(1 - (r.omega * sw) / p.turnRate, 0.08, 2));
     // traction circle: translation + yaw force demand share mu*m*g
-    const use = at / aTrac + (r.inertia * al) / (PHYS.moduleR * r.radius * m * aTrac);
+    const use = at / aTrac + (r.inertia * al) / (PHYS.moduleR * k.R0 * m * aTrac);
     if (use > 1) { at /= use; al /= use; }
     r.vx += ux * at * dt; r.vz += uz * at * dt; r.omega += sw * al * dt;
     if (tank) { // skid-steer: lateral velocity is killed by friction, only a hard shove makes it slide
@@ -306,7 +401,7 @@ export function createSim(options = {}) {
       k.intakeT = 0; k.intakeTarget = null; return;
     }
     const c = Math.cos(r.heading), s = Math.sin(r.heading);
-    const half = r.preset.id === 'sweeper' ? TUNE.intakeHalfWide : TUNE.intakeHalf, dr = r.radius - ROBOT.radius;
+    const half = r.preset.id === 'sweeper' ? TUNE.intakeHalfWide : TUNE.intakeHalf, dr = k.hx - ROBOT.radius; // front face vs the 0.5 m reference
     let best = null, bd = 1e9;
     for (const t of tubes) {
       if ((t.state !== 'floor' && t.state !== 'chute') || t.lockT > 0) continue;
@@ -355,7 +450,8 @@ export function createSim(options = {}) {
       else if (a.target === 'floor') {
         const t = tubeById.get(r.held[0]), c = Math.cos(r.heading), s = Math.sin(r.heading);
         release(t);
-        dropToFloor(t, r.x + c * (r.radius + 0.4), r.z + s * (r.radius + 0.4), c * 1.2 + r.vx, s * 1.2 + r.vz);
+        dropToFloor(t, r.x + c * (k.hx + 0.4), r.z + s * (k.hx + 0.4), c * 1.2 + r.vx, s * 1.2 + r.vz);
+        t.sx = r.x; t.sz = r.z;
         t.lockT = 0.7; t.placedInAuto = false;
         emit({ type: 'place', robotId: r.id, tubeId: t.id, text: 'floor' });
       } else {
@@ -371,80 +467,112 @@ export function createSim(options = {}) {
   }
 
   function moveRobot(r, k, dt) {
-    r.heading = wrap(r.heading + r.omega * dt);
+    k.hd0 = r.heading; r.heading = wrap(r.heading + r.omega * dt);
     r.x += r.vx * dt; r.z += r.vz * dt;
   }
 
-  // Static obstacle contact (n points from obstacle to robot): restitution on normal, Coulomb friction impulse -> spin.
-  function wallHit(r, nx, nz, pen) {
+  // Static contact at world point (px, pz), n from obstacle to robot: inelastic normal impulse (spin from the off-center point), Coulomb friction.
+  function wallHit(r, nx, nz, pen, px, pz) {
+    const ax = px - r.x, az = pz - r.z;
     r.x += nx * pen; r.z += nz * pen;
-    const R = r.radius, ax = -nx * R, az = -nz * R;                     // contact arm from center
-    const vcx = r.vx - r.omega * az, vcz = r.vz + r.omega * ax;
-    const vn = vcx * nx + vcz * nz;
+    const vn = (r.vx - r.omega * az) * nx + (r.vz + r.omega * ax) * nz;
     if (vn >= 0) return;
-    const jn = -(1 + (vn < -PHYS.restV ? PHYS.wallRest : 0)) * vn * r.mass;
-    r.vx += (nx * jn) / r.mass; r.vz += (nz * jn) / r.mass;
-    const tx = -nz, tz = nx, vt = (r.vx - r.omega * az) * tx + (r.vz + r.omega * ax) * tz;
-    const kt = 1 / r.mass + (R * R) / r.inertia;
-    const jt = clamp(-vt / kt, -PHYS.wallMu * jn, PHYS.wallMu * jn);
-    r.vx += (tx * jt) / r.mass; r.vz += (tz * jt) / r.mass; r.omega += (ax * tz - az * tx) * jt / r.inertia;
+    const rn = ax * nz - az * nx, jn = -vn / (1 / r.mass + (rn * rn) / r.inertia);
+    r.vx += (nx * jn) / r.mass; r.vz += (nz * jn) / r.mass; r.omega += (rn * jn) / r.inertia;
+    const tx = -nz, tz = nx, vt = (r.vx - r.omega * az) * tx + (r.vz + r.omega * ax) * tz, rtn = ax * tz - az * tx;
+    const jt = clamp(-vt / (1 / r.mass + (rtn * rtn) / r.inertia), -PHYS.wallMu * jn, PHYS.wallMu * jn);
+    r.vx += (tx * jt) / r.mass; r.vz += (tz * jt) / r.mass; r.omega += (rtn * jt) / r.inertia;
   }
 
-  function collideRobotWorld(r, k) {
-    const R = r.radius;
+  const _C = { nx: 0, nz: 0, pen: 0, px: 0, pz: 0 }, _pt = [0, 0];
+  function deepest(S, nx, nz) { // bumper surface point farthest into the half-plane whose outward normal is (nx, nz)
+    corners(S, _a);
+    let lo = 1e9; for (let i = 0; i < 8; i += 2) lo = Math.min(lo, _a[i] * nx + _a[i + 1] * nz);
+    let sx = 0, sz = 0, n = 0;
+    for (let i = 0; i < 8; i += 2) if (_a[i] * nx + _a[i + 1] * nz < lo + 0.002) { sx += _a[i]; sz += _a[i + 1]; n++; }
+    _pt[0] = sx / n - nx * S.m; _pt[1] = sz / n - nz * S.m;
+    return _pt;
+  }
+
+  // One pass of robot-vs-static push-out; returns the largest penetration it fixed.
+  function worldPass(r, k) {
+    let m = 0;
+    const S = sh(r);
+    const plane = (nx, nz, pen) => {
+      if (pen <= 1e-6) return;
+      m = Math.max(m, pen);
+      if (pen > 1e-3) k.jam = true;
+      const p = deepest(sh(r), nx, nz); wallHit(r, nx, nz, pen, p[0], p[1]);
+    };
     if (k.platform) {
       const q = k.platform, open = q.z1 < 0;
-      const out = open ? r.z > q.z1 - 0.15 : r.z < q.z0 + 0.15;
-      if (out) { k.platform = null; }
-      else {
-        r.x = clamp(r.x, q.x0 + R, q.x1 - R);
-        r.z = open ? Math.max(r.z, q.z0 + R) : Math.min(r.z, q.z1 - R);
-        r.y = q.height;
+      if (q.x1 - q.x0 <= 2 * S.ex) { r.x = (q.x0 + q.x1) / 2; r.vx = 0; }
+      else { plane(1, 0, q.x0 + S.ex - r.x); plane(-1, 0, r.x - (q.x1 - S.ex)); }
+      if (open) plane(0, 1, q.z0 + S.ez - r.z); else plane(0, -1, r.z - (q.z1 - S.ez));
+    } else if (r.action?.type !== 'climb') {
+      for (const O of obsShapes) {
+        if (!contact(O, sh(r), _C)) continue;
+        m = Math.max(m, _C.pen); if (_C.pen > 1e-3) k.jam = true; wallHit(r, _C.nx, _C.nz, _C.pen, _C.px, _C.pz);
       }
     }
-    if (!k.platform && r.action?.type !== 'climb') {
-      for (const q of obstacles) { const n = circleRect(r.x, r.z, R, q); if (n) wallHit(r, n[0], n[1], n[2]); }
-    }
-    const mx = FIELD.halfL - R, mz = FIELD.halfW - R;
-    if (r.x < -mx) wallHit(r, 1, 0, -mx - r.x); else if (r.x > mx) wallHit(r, -1, 0, r.x - mx);
-    if (r.z < -mz) wallHit(r, 0, 1, -mz - r.z); else if (r.z > mz) wallHit(r, 0, -1, r.z - mz);
+    plane(1, 0, -FIELD.halfL + S.ex - r.x); plane(-1, 0, r.x - (FIELD.halfL - S.ex));
+    plane(0, 1, -FIELD.halfW + S.ez - r.z); plane(0, -1, r.z - (FIELD.halfW - S.ez));
+    return m;
   }
 
-  function collideRobots(first) {
-    if (first) for (const r of robots) r.contacts = [];
+  // One pass of bumper-vs-bumper: mass-weighted full push-out + inelastic impulse with friction at the real contact point.
+  function pairPass() {
+    let m = 0;
     for (let i = 0; i < robots.length; i++) {
       for (let j = i + 1; j < robots.length; j++) {
         const a = robots[i], b = robots[j];
         if (Math.abs(a.y - b.y) > 0.35) continue;
-        const ra = a.radius, rb = b.radius, R2 = ra + rb;
-        let dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
-        const ka = rt.get(a.id), key = b.id;
-        if (first) {
-          if (d < R2 + 0.03) {
-            a.contacts.push(b.id); b.contacts.push(a.id);
-            if (!ka.touching.has(key)) { ka.touching.add(key); emit({ type: 'contact', robotId: a.id, text: b.id }); }
-          } else ka.touching.delete(key);
-        }
-        if (d >= R2) continue;
-        if (d < 1e-6) { dx = 1; dz = 0; d = 1; }
-        const nx = dx / d, nz = dz / d;
         const aFix = a.action?.type === 'climb', bFix = b.action?.type === 'climb';
         const ia = aFix ? 0 : 1 / a.mass, ib = bFix ? 0 : 1 / b.mass, iia = aFix ? 0 : 1 / a.inertia, iib = bFix ? 0 : 1 / b.inertia;
-        if (ia + ib === 0) continue;
-        const cor = (Math.max(R2 - d - PHYS.slop, 0) * 0.9) / (ia + ib);
+        if (ia + ib === 0 || !contact(sh(a), sh(b), _C)) continue;
+        const { nx, nz, pen, px, pz } = _C;
+        if (pen > m) m = pen;
+        if (pen > 1e-3) rt.get(a.id).jam = rt.get(b.id).jam = true;
+        const cor = pen / (ia + ib), aax = px - a.x, aaz = pz - a.z, bax = px - b.x, baz = pz - b.z;
         a.x -= nx * cor * ia; a.z -= nz * cor * ia; b.x += nx * cor * ib; b.z += nz * cor * ib;
-        const aax = nx * ra, aaz = nz * ra, bax = -nx * rb, baz = -nz * rb; // contact arms (a->p, b->p)
         let rvx = b.vx - b.omega * baz - (a.vx - a.omega * aaz), rvz = b.vz + b.omega * bax - (a.vz + a.omega * aax);
         const vn = rvx * nx + rvz * nz;
         if (vn >= 0) continue;
-        const jn = (-(1 + (vn < -PHYS.restV ? PHYS.robotRest : 0)) * vn) / (ia + ib);
-        a.vx -= nx * jn * ia; a.vz -= nz * jn * ia; b.vx += nx * jn * ib; b.vz += nz * jn * ib;
+        const an = aax * nz - aaz * nx, bn = bax * nz - baz * nx;
+        const jn = -vn / (ia + ib + an * an * iia + bn * bn * iib);
+        a.vx -= nx * jn * ia; a.vz -= nz * jn * ia; b.vx += nx * jn * ib; b.vz += nz * jn * ib; a.omega -= an * jn * iia; b.omega += bn * jn * iib;
         rvx = b.vx - b.omega * baz - (a.vx - a.omega * aaz); rvz = b.vz + b.omega * bax - (a.vz + a.omega * aax);
-        const tx = -nz, tz = nx, vt = rvx * tx + rvz * tz;
-        const kt = ia + ib + ra * ra * iia + rb * rb * iib;
-        const jt = clamp(-vt / kt, -PHYS.robotMu * jn, PHYS.robotMu * jn);
-        a.vx -= tx * jt * ia; a.vz -= tz * jt * ia; b.vx += tx * jt * ib; b.vz += tz * jt * ib;
-        a.omega -= (aax * tz - aaz * tx) * jt * iia; b.omega += (bax * tz - baz * tx) * jt * iib;
+        const tx = -nz, tz = nx, vt = rvx * tx + rvz * tz, at = aax * tz - aaz * tx, bt = bax * tz - baz * tx;
+        const jt = clamp(-vt / (ia + ib + at * at * iia + bt * bt * iib), -PHYS.robotMu * jn, PHYS.robotMu * jn);
+        a.vx -= tx * jt * ia; a.vz -= tz * jt * ia; b.vx += tx * jt * ib; b.vz += tz * jt * ib; a.omega -= at * jt * iia; b.omega += bt * jt * iib;
+      }
+    }
+    return m;
+  }
+
+  // Iterate pair + world passes until nothing overlaps by more than 0.5 mm; the world pass always runs last so walls win.
+  function solveContacts() {
+    for (const r of robots) { const k = rt.get(r.id); if (k.platform && (k.platform.z1 < 0 ? r.z > k.platform.z1 - 0.15 : r.z < k.platform.z0 + 0.15)) k.platform = null; }
+    const solve = () => {
+      for (let it = 0; it < 16; it++) {
+        for (const r of robots) rt.get(r.id).jam = false;
+        const a = pairPass();
+        let w = 0;
+        for (const r of robots) w = Math.max(w, worldPass(r, rt.get(r.id)));
+        if (a < 5e-4 && w < 5e-4) return;
+      }
+    };
+    solve();
+    let jam = false; // a rotation that can't fit (pinched between walls/robots) is blocked: undo this substep's yaw and re-solve
+    for (const r of robots) { const k = rt.get(r.id); if (k.jam && r.heading !== k.hd0) { r.heading = k.hd0; r.omega = 0; pose(r); jam = true; } }
+    if (jam) solve();
+    for (const r of robots) r.contacts = [];
+    for (let i = 0; i < robots.length; i++) {
+      for (let j = i + 1; j < robots.length; j++) {
+        const a = robots[i], b = robots[j], ka = rt.get(a.id);
+        if (Math.abs(a.y - b.y) > 0.35 || !contact(sh(a), sh(b), _C, 0.03)) { ka.touching.delete(b.id); continue; }
+        a.contacts.push(b.id); b.contacts.push(a.id);
+        if (!ka.touching.has(b.id)) { ka.touching.add(b.id); emit({ type: 'contact', robotId: a.id, text: b.id }); }
       }
     }
   }
@@ -457,7 +585,7 @@ export function createSim(options = {}) {
     const r = TUBE.outerRadius;
     const mx = FIELD.halfL - r, mz = FIELD.halfW - r;
     const bounce = (q) => {
-      const n = circleRect(t.x, t.z, r, q);
+      const n = circleRect(t.x, t.z, r, q, t.px, t.pz);
       if (!n) return;
       t.x += n[0] * n[2]; t.z += n[1] * n[2];
       const vn = t.vx * n[0] + t.vz * n[1];
@@ -471,20 +599,20 @@ export function createSim(options = {}) {
   }
 
   function tubeRobot(t) {
+    const R = TUBE.outerRadius;
     for (const r of robots) {
       if (r.y > 0.1) continue;
-      const k = rt.get(r.id), rr = r.radius + TUBE.outerRadius;
-      const dx = t.x - r.x, dz = t.z - r.z, d2 = dx * dx + dz * dz;
-      if (d2 >= rr * rr) continue;
+      const k = rt.get(r.id), dx = t.x - r.x, dz = t.z - r.z, br = r.radius + R;
+      if (dx * dx + dz * dz >= br * br) continue;
+      const n = circleShape(t.x, t.z, R, sh(r));
+      if (!n) continue;
       if (k.zone && t.lockT <= 0) {
         const c = Math.cos(r.heading), s = Math.sin(r.heading), f = dx * c + dz * s, l = -dx * s + dz * c;
-        if (f > TUNE.intakeNear + r.radius - ROBOT.radius && Math.abs(l) < (r.preset.id === 'sweeper' ? TUNE.intakeHalfWide : TUNE.intakeHalf)) continue;
+        if (f > TUNE.intakeNear + k.hx - ROBOT.radius && Math.abs(l) < (r.preset.id === 'sweeper' ? TUNE.intakeHalfWide : TUNE.intakeHalf)) continue;
       }
-      let d = Math.sqrt(d2), nx, nz;
-      if (d < 1e-6) { nx = 1; nz = 0; d = 0; } else { nx = dx / d; nz = dz / d; }
-      const pen = rr - d;
+      const [nx, nz, pen] = n;
       t.x += nx * pen; t.z += nz * pen;
-      const ax = nx * r.radius, az = nz * r.radius;                   // robot surface velocity incl. spin
+      const ax = t.x - nx * R - r.x, az = t.z - nz * R - r.z;          // contact arm on the bumper; surface velocity incl. spin
       const rvx = t.vx - (r.vx - r.omega * az), rvz = t.vz - (r.vz + r.omega * ax), vn = rvx * nx + rvz * nz;
       if (vn < 0) {
         const dv = -(1 + (vn < -PHYS.restV ? PHYS.tubeRobotRest : 0)) * vn, mr = TUBE.mass / r.mass;
@@ -493,13 +621,41 @@ export function createSim(options = {}) {
       }
       tubeWalls(t);
       // pinned against a wall: slide sideways around the robot
-      const ex = t.x - r.x, ez = t.z - r.z, ed = Math.hypot(ex, ez);
-      if (ed < rr - 0.02) {
-        const sgn = (-ez * (t.vx || 1) + ex * (t.vz || 0)) >= 0 ? 1 : -1;
-        const tx = -ez / (ed || 1) * sgn, tz = ex / (ed || 1) * sgn, push = rr - ed;
-        t.x += tx * push; t.z += tz * push; tubeWalls(t);
+      const n2 = circleShape(t.x, t.z, R, sh(r));
+      if (n2 && n2[2] > 0.02) {
+        const sgn = (-n2[1] * (t.vx || 1) + n2[0] * (t.vz || 0)) >= 0 ? 1 : -1;
+        t.x += -n2[1] * sgn * n2[2]; t.z += n2[0] * sgn * n2[2]; tubeWalls(t);
       }
     }
+  }
+
+  // Tube in flight vs wall/platform tops, robot bumpers (below robot height). Scripted post shots are only blockable on the way in.
+  function flightHit(t, f) {
+    const R = TUBE.outerRadius, bot = t.y - TR;
+    if (f.post && Math.hypot(f.tx - t.x, f.tz - t.z) < 1) return;
+    let hit = false;
+    for (const q of solids) {
+      if (bot >= q.height) continue;
+      const n = circleRect(t.x, t.z, R, q, t.px, t.pz);
+      if (!n) continue;
+      t.x += n[0] * n[2]; t.z += n[1] * n[2];
+      const vn = t.vx * n[0] + t.vz * n[1];
+      if (vn < 0) { t.vx -= (1 + PHYS.tubeWallRest) * vn * n[0]; t.vz -= (1 + PHYS.tubeWallRest) * vn * n[1]; }
+      hit = true;
+    }
+    for (const r of robots) {
+      if (bot >= r.y + PHYS.robotH || (r.id === f.src && f.t < 0.3)) continue;
+      const n = circleShape(t.x, t.z, R, sh(r));
+      if (!n) continue;
+      t.x += n[0] * n[2]; t.z += n[1] * n[2];
+      const vn = (t.vx - r.vx) * n[0] + (t.vz - r.vz) * n[1];
+      if (vn < 0) {
+        const dv = -(1 + PHYS.tubeRobotRest) * vn, mr = TUBE.mass / r.mass;
+        t.vx += dv * n[0]; t.vz += dv * n[1]; r.vx -= dv * n[0] * mr; r.vz -= dv * n[1] * mr;
+      }
+      hit = true;
+    }
+    if (hit) f.post = null; // knocked off its scripted arc: ordinary ballistic flight from here
   }
 
   function updateTubes(dt) {
@@ -507,9 +663,10 @@ export function createSim(options = {}) {
     const act = [];
     for (const t of tubes) {
       if (t.lockT > 0) t.lockT -= dt;
+      if (t.sx === undefined) { t.px = t.x; t.pz = t.z; } else { t.px = t.sx; t.pz = t.sz; t.sx = undefined; } // start-of-substep position: the side a wall push resolves to
       if (t.state === 'held') {
         const r = robotById.get(t.holder), i = r.held.indexOf(t.id), c = Math.cos(r.heading), s = Math.sin(r.heading);
-        t.x = r.x + c * 0.1; t.z = r.z + s * 0.1; t.y = r.y + 0.55 + 0.18 * Math.max(0, i);
+        t.x = clamp(r.x + c * 0.1, -FIELD.halfL + TUBE.outerRadius, FIELD.halfL - TUBE.outerRadius); t.z = clamp(r.z + s * 0.1, -FIELD.halfW + TUBE.outerRadius, FIELD.halfW - TUBE.outerRadius); t.y = r.y + 0.55 + 0.18 * Math.max(0, i);
         t.vx = r.vx; t.vz = r.vz; t.vy = 0; t.moving = false;
       } else if (t.state === 'flight') {
         const f = t.flight;
@@ -519,7 +676,8 @@ export function createSim(options = {}) {
           t.x = f.x0 + (f.tx - f.x0) * u; t.z = f.z0 + (f.tz - f.z0) * u;
           t.y = f.y0 + f.vy * f.t - 0.5 * G * f.t * f.t;
           t.vy = f.vy - G * f.t;
-          if (f.t >= f.T) {
+          flightHit(t, f);
+          if (f.post && f.t >= f.T) {
             const p = postById.get(f.post);
             if (p.tubes.length < POINTS.maxPhysicalPerPost) stackOn(t, p, undefined);
             else {
@@ -532,6 +690,7 @@ export function createSim(options = {}) {
           t.vx *= dk; t.vz *= dk; t.vy = t.vy * dk - G * dt;
           t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
           t.yaw += t.spin * dt;
+          flightHit(t, f);
           const fx = FIELD.halfL - TUBE.outerRadius, fz = FIELD.halfW - TUBE.outerRadius;
           if (Math.abs(t.x) > fx) { t.x = clamp(t.x, -fx, fx); t.vx *= -PHYS.tubeWallRest; }
           if (Math.abs(t.z) > fz) { t.z = clamp(t.z, -fz, fz); t.vz *= -PHYS.tubeWallRest; }
@@ -590,6 +749,7 @@ export function createSim(options = {}) {
       if (sp < 0.0016 && t.state === 'floor') { t.vx = t.vz = 0; t.moving = false; if (phase === 'auto') t.placedInAuto = true; }
       else { t.moving = true; t.placedInAuto = false; }
       if (!Number.isFinite(t.x + t.z)) { t.x = 0; t.z = 0; t.vx = t.vz = 0; }
+      else if (sp > 144) { const f = 12 / Math.sqrt(sp); t.vx *= f; t.vz *= f; }
     }
   }
 
@@ -652,10 +812,10 @@ export function createSim(options = {}) {
       if (r.arm <= 0 && !r.action) r.armTier = 'stow';
       else if (r.action?.type === 'intake') r.armTier = 'floor';
     }
-    collideRobots(true); collideRobots(false);
+    for (const r of robots) pose(r);
+    solveContacts();
     for (const r of robots) {
       const k = rt.get(r.id);
-      collideRobotWorld(r, k);
       const targetY = k.platform ? k.platform.height : 0;
       if (r.action?.type !== 'climb') {
         if (r.y > targetY) r.y = Math.max(targetY, r.y - 2.5 * dt); else r.y = targetY;
@@ -673,7 +833,9 @@ export function createSim(options = {}) {
     if (ph) phase = ph;
     if (first) { first = false; }
     if (!(dt > 0)) return;
-    const n = Math.ceil(dt / MAX_SUB - 1e-9), h = dt / n;
+    let vmax = 0;
+    for (const r of robots) vmax = Math.max(vmax, Math.hypot(r.vx, r.vz));
+    const n = Math.max(Math.ceil(dt / MAX_SUB - 1e-9), Math.ceil((vmax * dt) / PHYS.maxStep - 1e-9)), h = dt / n; // robots never travel > 8 cm per substep
     for (let i = 0; i < n; i++) substep(h, inputs, i === 0);
   }
 

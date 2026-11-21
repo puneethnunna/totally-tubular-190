@@ -47,35 +47,83 @@ function bounds(p) {
   return b;
 }
 
-// Vertex clustering: snap vertices to a grid, average per cell, drop collapsed triangles.
+// Vertex clustering with quadric-ish vertex placement (keeps sharp edges / silhouettes much cleaner than plain averaging).
+// The grid is searched for the FINEST cell size whose result fits the triangle budget.
 export function decimate(p, target = MAX_TRIS) {
   if (p.length / 9 <= target) return p;
   const b = bounds(p), ext = Math.max(b[3] - b[0], b[4] - b[1], b[5] - b[2]) || 1;
-  let N = 700, out = p;
-  for (let pass = 0; pass < 12; pass++, N = Math.floor(N * 0.8)) {
-    out = cluster(p, b, ext / N);
-    if (out.length / 9 <= target) break;
+  const nv = p.length / 3, K = 4096;
+  const ids = (N) => {   // cell id per vertex + surviving triangle count
+    const cell = ext / N, map = new Map(), vid = new Int32Array(nv);
+    let cells = 0;
+    for (let i = 0; i < nv; i++) {
+      const key = Math.floor((p[i * 3] - b[0]) / cell) + K * (Math.floor((p[i * 3 + 1] - b[1]) / cell) + K * Math.floor((p[i * 3 + 2] - b[2]) / cell));
+      let id = map.get(key);
+      if (id === undefined) { id = cells++; map.set(key, id); }
+      vid[i] = id;
+    }
+    let tris = 0;
+    for (let t = 0; t < nv; t += 3) if (vid[t] !== vid[t + 1] && vid[t + 1] !== vid[t + 2] && vid[t] !== vid[t + 2]) tris++;
+    return { vid, cells, tris, cell };
+  };
+  // N = cells along the longest axis; surviving tris grow ~N^2. One probe, then a short bracketed binary search.
+  const r0 = ids(500);
+  let best = r0.tris <= target ? r0 : null;
+  const guess = Math.max(6, Math.round(500 * Math.sqrt(target / Math.max(1, r0.tris))));
+  let lo = Math.max(6, Math.floor(guess * 0.6)), hi = Math.min(3000, Math.ceil(guess * 1.5));
+  if (best) lo = Math.max(lo, 501);
+  for (let it = 0; it < 6 && lo <= hi; it++) {
+    const mid = (lo + hi) >> 1, r = ids(mid);
+    if (r.tris <= target) { best = r; lo = mid + 1; } else hi = mid - 1;
   }
-  return out;
+  if (!best) best = ids(6);
+  return placeCluster(p, best);
 }
 
-function cluster(p, b, cell) {
-  const nv = p.length / 3, map = new Map(), vid = new Int32Array(nv);
-  const sum = [], cnt = [];
-  const K = 2048;
-  for (let i = 0; i < nv; i++) {
-    const x = p[i * 3], y = p[i * 3 + 1], z = p[i * 3 + 2];
-    const key = Math.floor((x - b[0]) / cell) + K * (Math.floor((y - b[1]) / cell) + K * Math.floor((z - b[2]) / cell));
-    let id = map.get(key);
-    if (id === undefined) { id = cnt.length; map.set(key, id); cnt.push(0); sum.push(0, 0, 0); }
-    vid[i] = id; cnt[id]++; sum[id * 3] += x; sum[id * 3 + 1] += y; sum[id * 3 + 2] += z;
+function placeCluster(p, { vid, cells, cell }) {
+  const nv = p.length / 3;
+  const cnt = new Float64Array(cells), sum = new Float64Array(cells * 3);
+  const Q = new Float64Array(cells * 10);    // A(6: xx xy xz yy yz zz), b(3), w
+  for (let i = 0; i < nv; i++) { const c = vid[i]; cnt[c]++; sum[c * 3] += p[i * 3]; sum[c * 3 + 1] += p[i * 3 + 1]; sum[c * 3 + 2] += p[i * 3 + 2]; }
+  for (let t = 0; t < nv; t += 3) {
+    const o = t * 3;
+    const ux = p[o + 3] - p[o], uy = p[o + 4] - p[o + 1], uz = p[o + 5] - p[o + 2];
+    const vx = p[o + 6] - p[o], vy = p[o + 7] - p[o + 1], vz = p[o + 8] - p[o + 2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const area2 = Math.hypot(nx, ny, nz);
+    if (area2 < 1e-18) continue;
+    nx /= area2; ny /= area2; nz /= area2;
+    const d = -(nx * p[o] + ny * p[o + 1] + nz * p[o + 2]), w = area2;   // area-weighted
+    for (let k = 0; k < 3; k++) {
+      const c = vid[t + k] * 10;
+      Q[c] += w * nx * nx; Q[c + 1] += w * nx * ny; Q[c + 2] += w * nx * nz;
+      Q[c + 3] += w * ny * ny; Q[c + 4] += w * ny * nz; Q[c + 5] += w * nz * nz;
+      Q[c + 6] -= w * d * nx; Q[c + 7] -= w * d * ny; Q[c + 8] -= w * d * nz; Q[c + 9] += w;
+    }
+  }
+  const pos = new Float32Array(cells * 3);
+  for (let c = 0; c < cells; c++) {
+    const mx = sum[c * 3] / cnt[c], my = sum[c * 3 + 1] / cnt[c], mz = sum[c * 3 + 2] / cnt[c], q = c * 10;
+    const lam = 0.08 * (Q[q] + Q[q + 3] + Q[q + 5]) / 3 + 1e-12;     // regularise toward the centroid
+    const a = Q[q] + lam, bb = Q[q + 1], cc = Q[q + 2], d = Q[q + 3] + lam, e = Q[q + 4], f = Q[q + 5] + lam;
+    const r0 = Q[q + 6] + lam * mx, r1 = Q[q + 7] + lam * my, r2 = Q[q + 8] + lam * mz;
+    const det = a * (d * f - e * e) - bb * (bb * f - e * cc) + cc * (bb * e - d * cc);
+    let x = mx, y = my, z = mz;
+    if (Math.abs(det) > 1e-30) {
+      x = (r0 * (d * f - e * e) - bb * (r1 * f - e * r2) + cc * (r1 * e - d * r2)) / det;
+      y = (a * (r1 * f - e * r2) - r0 * (bb * f - e * cc) + cc * (bb * r2 - r1 * cc)) / det;
+      z = (a * (d * r2 - r1 * e) - bb * (bb * r2 - r1 * cc) + r0 * (bb * e - d * cc)) / det;
+      const lim = cell * 0.75;     // never wander far from the centroid
+      if (!(Math.abs(x - mx) < lim && Math.abs(y - my) < lim && Math.abs(z - mz) < lim)) { x = mx; y = my; z = mz; }
+    }
+    pos[c * 3] = x; pos[c * 3 + 1] = y; pos[c * 3 + 2] = z;
   }
   const out = new Float32Array(p.length);
   let n = 0;
   for (let t = 0; t < nv; t += 3) {
     const a = vid[t], c = vid[t + 1], d = vid[t + 2];
     if (a === c || c === d || a === d) continue;
-    for (const v of [a, c, d]) for (let k = 0; k < 3; k++) out[n++] = sum[v * 3 + k] / cnt[v];
+    for (const v of [a, c, d]) { out[n++] = pos[v * 3]; out[n++] = pos[v * 3 + 1]; out[n++] = pos[v * 3 + 2]; }
   }
   return out.slice(0, n);
 }
@@ -121,10 +169,16 @@ export function unpackMesh(m) {
   return { positions: p, triCount: p.length / 9, footprint: m.footprint, height: m.height, radius: m.radius, units: m.units };
 }
 
+// robots.js registers BufferGeometryUtils.toCreasedNormals here (keeps this module THREE-free for Node tests).
+let creaseFn = null;
+export const CREASE_ANGLE = Math.PI / 6;   // 30 deg
+export function setCreaseFn(fn) { creaseFn = fn; }
+
 export function geometryFromData(THREE, data) {
-  const g = new THREE.BufferGeometry();
+  let g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
-  g.computeVertexNormals();   // non-indexed -> flat shading
+  if (creaseFn) { const c = creaseFn(g, CREASE_ANGLE); g.dispose(); g = c; }   // smooth curved parts, keep hard edges
+  else g.computeVertexNormals();   // non-indexed -> flat shading
   g.computeBoundingBox(); g.computeBoundingSphere();
   g.userData = { footprint: data.footprint, height: data.height, radius: data.radius, triCount: data.triCount };
   return g;

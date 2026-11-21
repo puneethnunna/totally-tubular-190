@@ -17,6 +17,11 @@ export const CAM = {
   top: { fov: 50 },
 };
 // exponential follow rates (1/s) per cameraFollow setting: [position, look-at]
+// Driver-station tracking: look-at = lerp(field center, robot, w); fov narrows from NEAR to FAR as the robot gets farther.
+export const TRACK = {
+  fovNear: 58, fovFar: 32, distNear: 4, distFar: 18, maxFovSpeed: 18,   // deg, m, deg/s
+  smooth: { w: 0.75, look: 2.6, fov: 2.2 }, tight: { w: 0.9, look: 7, fov: 5 }, locked: { w: 0.9, look: 0, fov: 5 },
+};
 const RATES = {
   smooth: { third: [3.2, 5], first: [12, 16], fixed: [4, 4] },
   tight: { third: [10, 14], first: [26, 30], fixed: [6, 6] },
@@ -26,13 +31,21 @@ export function createRenderer(canvas) {
   const gl = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
   gl.outputColorSpace = THREE.SRGBColorSpace;
   gl.toneMapping = THREE.ACESFilmicToneMapping;
-  gl.toneMappingExposure = 0.85;
+  gl.toneMappingExposure = 0.8;
   gl.shadowMap.enabled = true;
   gl.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x141824);
-  scene.fog = new THREE.Fog(0x141824, 40, 110);
+  scene.background = new THREE.Color(0x27303f);
+  scene.fog = new THREE.Fog(0x27303f, 45, 120);
+  // frsim-style dark sky gradient (top #0b0f16 -> horizon #27303f), unlit and unfogged
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(200, 24, 16), new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { top: { value: new THREE.Color('#0b0f16') }, hor: { value: new THREE.Color('#27303f') } },
+    vertexShader: 'varying float h; void main(){ h = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }',
+    fragmentShader: 'uniform vec3 top; uniform vec3 hor; varying float h; void main(){ gl_FragColor = vec4(mix(hor, top, pow(clamp(h,0.,1.), 0.55)), 1.);\n#include <colorspace_fragment>\n}',
+  }));
+  sky.renderOrder = -10; sky.frustumCulled = false; sky.name = 'sky'; scene.add(sky);
   const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 250);
   camera.position.set(-12, 4.2, 1.1);
 
@@ -40,13 +53,15 @@ export function createRenderer(canvas) {
   const pmrem = new THREE.PMREMGenerator(gl);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   pmrem.dispose();
-  scene.add(new THREE.HemisphereLight(0xd6e4ff, 0x4a4a55, 0.35));
-  const sun = new THREE.DirectionalLight(0xfff4e6, 1.8);
+  scene.add(new THREE.HemisphereLight(0xd5e4ff, 0x4a4a4a, 0.3));      // sky fill + ground bounce (#4a4a4a)
+  const fill = new THREE.DirectionalLight(0xd5e4ff, 0.45);            // cool fill from the opposite side, no shadow
+  fill.position.set(9, 10, -7); scene.add(fill);
+  const sun = new THREE.DirectionalLight(0xffffff, 2.2);              // key light
   sun.position.set(-6, 20, 8);
   sun.castShadow = true;
   const sc = sun.shadow.camera;
   sc.left = -12; sc.right = 12; sc.top = 8.5; sc.bottom = -8.5; sc.near = 4; sc.far = 50;
-  sun.shadow.bias = -0.0003; sun.shadow.normalBias = 0.025; sun.shadow.radius = 3;
+  sun.shadow.bias = -0.0003; sun.shadow.normalBias = 0.025; sun.shadow.radius = 4;
   scene.add(sun, sun.target);
 
   const field = buildField(scene);
@@ -59,8 +74,8 @@ export function createRenderer(canvas) {
   scene.add(tubes);
 
   const models = new Map(); // id -> { key, model }
-  let mode = 'driver', alliance = 'blue', playerId = null, quality = 'high', slot = 0, follow = 'smooth';
-  let init = true, last = performance.now(), fovTarget = CAM.driver.fov, hidden = false;
+  let driverTracking = true, mode = 'driver', alliance = 'blue', playerId = null, quality = 'high', slot = 0, follow = 'smooth';
+  let fovRate = 6, trackRobot = false, init = true, last = performance.now(), fovTarget = CAM.driver.fov, hidden = false;
   const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(), camUp = new THREE.Vector3(0, 1, 0);
   const tp = new THREE.Vector3(), tl = new THREE.Vector3(), tu = new THREE.Vector3(0, 1, 0);
 
@@ -80,6 +95,7 @@ export function createRenderer(canvas) {
   }
 
   function setOptions(o = {}) {
+    if (o.driverTracking !== undefined) driverTracking = !!o.driverTracking;
     if (o.cameraFollow && RATES[o.cameraFollow] !== undefined) follow = o.cameraFollow;
     else if (o.cameraFollow === 'locked') follow = 'locked';
     if (o.background !== undefined) field.stands.visible = !!o.background;
@@ -144,6 +160,17 @@ export function createRenderer(canvas) {
     }
     const d = CAM.driver, sx = SIDES[alliance].driverStationX < 0 ? -1 : 1;   // fixed station behind the alliance wall
     tp.set(sx * (8.75 + d.dist), d.eye, DRIVER_Z[alliance][slot]); tl.set(0, 0.5, 0);
+    fovTarget = d.fov; fovRate = 6; trackRobot = false;
+    const tr = (driverTracking && mode === 'driver') ? find(sim) : null;
+    if (tr) {
+      const T = TRACK[follow] || TRACK.smooth, y = tr.y || 0;
+      // never aim past the field edge, and never at more than the weighted blend: bounded swing
+      const rx = THREE.MathUtils.clamp(tr.x, -FIELD.halfL + 0.4, FIELD.halfL - 0.4), rz = THREE.MathUtils.clamp(tr.z, -FIELD.halfW + 0.2, FIELD.halfW - 0.2);
+      tl.set(rx * T.w, 0.5 + (0.3 + y * 0.5 - 0.5) * T.w, rz * T.w);
+      rate = [(RATES[follow] || RATES.smooth).fixed[0], T.look || 1]; fovRate = T.fov; trackRobot = true;
+      const dist = Math.hypot(rx - tp.x, rz - tp.z), k = THREE.MathUtils.smoothstep(dist, TRACK.distNear, TRACK.distFar);
+      fovTarget = TRACK.fovNear + (TRACK.fovFar - TRACK.fovNear) * k;
+    }
   }
 
   function syncRobots(rs, dt) {
@@ -203,15 +230,20 @@ export function createRenderer(canvas) {
     syncTubes(sim.state);
     if (mode !== 'free') {
       cameraTargets(sim);
-      const locked = follow === 'locked' && (mode === 'third' || mode === 'first');
+      const locked = follow === 'locked' && (mode === 'third' || mode === 'first' || (mode === 'driver' && trackRobot));
       const kp = init || locked ? 1 : 1 - Math.exp(-dt * rate[0]), kl = init || locked ? 1 : 1 - Math.exp(-dt * rate[1]);
       init = false;
       camPos.lerp(tp, kp); camLook.lerp(tl, kl); camUp.lerp(tu, kl).normalize();
       camera.position.copy(camPos); camera.up.copy(camUp); camera.lookAt(camLook);
       if (Math.abs(camera.fov - fovTarget) > 0.01) {
-        camera.fov += (fovTarget - camera.fov) * (1 - Math.exp(-dt * 6)); camera.updateProjectionMatrix();
+        let df = (fovTarget - camera.fov) * (1 - Math.exp(-dt * fovRate));
+        if (trackRobot) df = THREE.MathUtils.clamp(df, -TRACK.maxFovSpeed * dt, TRACK.maxFovSpeed * dt);   // no sudden zoom pumps
+        camera.fov += df; camera.updateProjectionMatrix();
       }
     } else { camPos.copy(camera.position); camLook.set(0, 0, 0); camUp.set(0, 1, 0); }
+    // the glazed shelf of the end walls nearly vanishes when the camera sits behind it (driver stations), else it veils the whole view
+    const em = field.cad && field.cad.userData.mats && field.cad.userData.mats.endwall;
+    if (em) em.opacity = Math.abs(camera.position.x) > 8.3 ? 0.04 : 0.42;
     gl.render(scene, camera);
   }
 

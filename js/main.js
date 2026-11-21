@@ -1,6 +1,6 @@
 // Boot + game loop glue. `?stubs=1` loads test/stubs/* instead of js/* (or `?stubs=sim,ai` for specific modules).
 import { SIDES, opponent } from './config.js';
-import { createInput } from './input.js';
+import { createInput, planPlace, nextTier, tierLabel } from './input.js';
 import { createUI, loadSettings, saveSettings, ensureMeshes } from './ui.js';
 
 const STEP = 1 / 120;
@@ -15,7 +15,7 @@ await Promise.all(NAMES.map(async (n) => {
 const canvas = document.getElementById('game');
 const settings = loadSettings();
 const input = createInput();
-input.setKeys(settings.keys);
+input.configure(settings);
 let renderer = null, game = null, lastCfg = null, paused = false, lastT = performance.now(), hudT = 0, score = null, scoreT = 0;
 const CAMS = ['driver', 'third', 'first'];
 
@@ -24,8 +24,9 @@ const ui = createUI({
   onStart: (cfg) => startGame(cfg),
   onRestart: () => lastCfg && startGame(lastCfg),
   onResume: () => resume(),
+  onRumble: () => input.rumble(0, 1),
   onQuit: (to) => quit(to),
-  onSettings: () => { input.setKeys(settings.keys); applyRenderOpts(); document.body.classList.toggle('nogui', !!settings.hideGui); },
+  onSettings: () => { input.configure(settings); applyRenderOpts(); document.body.classList.toggle('nogui', !!settings.hideGui); },
 });
 await ui.refreshRobots();
 ui.showPick();
@@ -77,30 +78,27 @@ async function startGame(cfg) {
   }
   const match = M.match.createMatch(sim);
   input.setPlayers(p.length); input.setEnabled(true);
-  game = { sim, match, p, bots, state: 'countdown', cdEnd: performance.now() + 3400, acc: 0, phase: 'pre', cam: settings.camera, slot: 0, tier: 'auto', cap: settings.speeds[2] / 100, cfg };
+  game = { sim, match, p, bots, state: 'countdown', cdEnd: performance.now() + 3400, acc: 0, phase: 'pre', cam: settings.camera, slot: 0, tier: 'auto', tier2: 'auto', stow: {}, cap: settings.speeds[2] / 100, cfg };
   document.body.classList.add('playing');
   ui.show('none', false); ui.showHUD(true, p[0].def);
+  bdOn = false; ui.showBreakdown(false); ui.showStats(!!settings.showStats);
   renderer.resize?.(); setCam(game.cam); score = null;
   ui.updateHUD(hud());
 }
 
 function quit(to = 'title') {
-  game = null; paused = false; input.setEnabled(false); document.body.classList.remove('playing');
+  game = null; if (bdOn) { bdOn = false; ui.showBreakdown(false); } paused = false; input.setEnabled(false); document.body.classList.remove('playing');
   ui.showHUD(false); ui.hidePause(); to === 'setup' ? ui.showSetup() : ui.showHome();
 }
 
 const robotOf = (id) => game?.sim.state.robots.find((r) => r.id === id);
-const hud = () => ({ match: game.match, score, me: robotOf(game.p[0].id), camera: game.cam, tier: game.tier, cap: game.cap });
-const EDGES = ['scoreLower', 'scoreUpper', 'scoreFloor', 'launch'];
+const hud = () => ({ match: game.match, score, me: robotOf(game.p[0].id), camera: game.cam, tier: game.tier, cap: game.cap, device: input.lastDevice(), stats: statsInfo() });
+const EDGES = ['scoreLower', 'scoreUpper', 'scoreFloor', 'launch', 'place', 'drop', 'stow', 'tierToggle', 'requestTube'];
 const PHASE_MSG = { auto: 'AUTO — go!', teleop: 'TELEOP', endgame: 'ENDGAME — climb!', post: 'Match over' };
-const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-
-// Is the robot lined up with one of its upper posts (facing the wall, laterally within reach)?
-function upperReady(r) {
-  if (!r || !r.held?.length) return false;
-  return SIDES[r.alliance].posts.some((p) => p.tier === 'upper' && Math.abs(r.z - p.z) < 0.4 && Math.abs(p.tipX - r.x) < 1.4 &&
-    Math.abs(wrapA(r.heading - (p.dirX > 0 ? Math.PI : 0))) < 0.7);
-}
+let fps = 60;
+const statsInfo = () => { const r = game && robotOf(game.p[0].id); return { fps, speed: r ? Math.hypot(r.vx || 0, r.vz || 0) : 0 }; };
+let bdOn = false;
+const toggleFullscreen = () => { try { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); } catch (e) { console.warn('fullscreen', e); } };
 
 function foulToast(f) {
   const t = f.type === 'tech' ? 'TECH FOUL' : f.type === 'foul' ? 'FOUL' : 'WARNING';
@@ -109,6 +107,7 @@ function foulToast(f) {
 function eventToast(e) {
   const r = e.robotId && robotOf(e.robotId), human = game.p.some((q) => q.id === e.robotId);
   if (!human && e.type !== 'climb') return;
+  if (e.type === 'pickup' && human) input.rumble(game.p.find((q) => q.id === e.robotId)?.pi ?? 0);
   const msg = { pickup: 'Tube picked up', place: 'Tube placed', launch: 'Tube launched', land: 'Tube landed', feed: 'Human player feed', climb: 'Climb', invalid: 'Cannot do that' }[e.type];
   if (e.type === 'contact' || !msg) return;
   if (!human && e.type === 'climb') return;
@@ -124,6 +123,12 @@ function frame(t) {
   if (!game) return;
   const { sim, match } = game;
   const g = input.takeGlobal();
+  fps += (Math.min(240, 1 / Math.max(dt, 1e-3)) - fps) * 0.08;
+  if (g.fullscreen) toggleFullscreen();
+  if (g.stats) { settings.showStats = !settings.showStats; saveSettings(settings); ui.showStats(settings.showStats); }
+  if (paused && g.pause) { ui.hidePause(); resume(); }
+  const wantBd = !!g.breakdown && !paused && game.state !== 'over';
+  if (wantBd !== bdOn) { bdOn = wantBd; ui.showBreakdown(bdOn, score, game.p[0].alliance); }
   if (game.state === 'run' && !paused) {
     if (g.camera) cycleCam(1);
     if (g.slot) { game.slot = (game.slot + 1) % 3; setCam(game.cam); ui.toast(`Driver station ${game.slot + 1}`, { tag: 'V' }); }
@@ -140,10 +145,17 @@ function frame(t) {
     const frameIn = {};
     for (const q of game.p) {
       const r = robotOf(q.id), pr = q.def.preset;
-      const i = input.poll(q.alliance, q.pi, { cameraMode: game.cam, heading: r?.heading, drive: pr.drive, fieldRelative: settings.fieldRelative, cap: game.cap,
-        tier: { mode: game.tier, canUpper: !!pr.canUpper, canLower: pr.canLower !== false, upperReady: upperReady(r) } });
-      if (i.tierToggle && q.pi === 0) { game.tier = { auto: 'upper', upper: 'lower', lower: 'auto' }[game.tier]; ui.toast(`Score tier: ${game.tier.toUpperCase()}`, { tag: 'Z' }); }
+      const i = input.poll(q.alliance, q.pi, { cameraMode: game.cam, heading: r?.heading, drive: pr.drive, fieldRelative: settings.fieldRelative, cap: game.cap });
+      const tk = q.pi === 0 ? 'tier' : 'tier2';
+      if (i.tierToggle) { game[tk] = nextTier(game[tk], !!pr.canUpper); ui.toast(`Post tier: ${tierLabel(game[tk])}`, { tag: 'Z', alliance: q.alliance }); }
       if (i.requestTube && match.phase !== 'auto') { if (sim.requestHumanTube?.(q.alliance) === false) ui.toast('Human player not available', { alliance: q.alliance }); }
+      if (i.drop) i.scoreFloor = true;
+      if (i.place && r) {
+        const plan = planPlace({ robot: r, preset: pr, mode: game[tk], posts: SIDES[q.alliance].posts, tune: sim.tune });
+        if (plan.act) i[plan.act] = true; else ui.toast(plan.why, { tag: '!', alliance: q.alliance });
+      }
+      if (i.stow) { game.stow[q.id] = t + 450; ui.toast('Arm stowed', { tag: 'E', alliance: q.alliance }); }
+      if (t < (game.stow[q.id] || 0)) i.intake = false;
       frameIn[q.id] = i;
     }
     game.acc += dt;
@@ -175,6 +187,7 @@ function frame(t) {
     hudT = t;
     if (t - scoreT > 250 && game.state !== 'over') { scoreT = t; try { score = M.scoring.computeScore(sim, match); } catch (e) { score = score || null; } }
     if (game.state !== 'over') ui.updateHUD(hud());
+    if (bdOn) ui.showBreakdown(true, score, game.p[0].alliance);
   }
 }
 

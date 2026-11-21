@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Robot look</title>
+<style>html,body{margin:0;background:#0b0d11;color:#eae8e3;font:13px system-ui}#g{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;padding:8px}.c{height:420px;background:#161616;border-radius:8px;position:relative}.c b{position:absolute;left:8px;top:6px;z-index:2}</style>
+<script type="importmap">{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}</script></head><body><div id="g"></div>
+<script type="module">
+import { ROSTER, buildPreset, setMeshGeometry } from '../js/robots.js';
+import { geometryFromData } from '../js/stlImport.js';
+import * as THREE from 'three';
+import { createRobotPreview } from '../js/preview3d.js';
+const q = new URLSearchParams(location.hash.slice(1));
+const ids = (q.get('r') || '11046,11414,11114,13310').split(',');
+const g = document.getElementById('g');
+// synthetic "STL": a cylinder-ish body + box, to check creased normals
+function fakeStl(finish) {
+  const parts = [new THREE.CylinderGeometry(0.3, 0.3, 0.3, 40), new THREE.BoxGeometry(0.5, 0.2, 0.7)];
+  const pos = [];
+  parts.forEach((p, i) => { p = p.toNonIndexed(); p.translate(i ? 0.1 : -0.1, i ? 0.55 : 0.15, 0); pos.push(...p.attributes.position.array); });
+  const data = { positions: new Float32Array(pos), triCount: pos.length / 9, footprint: { x: 0.8, z: 0.7 }, height: 0.7, radius: 0.5 };
+  setMeshGeometry('fake-' + finish, geometryFromData(THREE, data));
+  return { number: '9999', preset: { ...buildPreset('stacker'), model: { kind: 'mesh', meshId: 'fake-' + finish, footprint: data.footprint, height: data.height, finish, accent: 0x1f62d6 } } };
+}
+const defs = ids.map((i) => i.startsWith('fake') ? fakeStl(i.split(':')[1] || 'aluminum') : ROSTER.find((r) => r.number === i));
+defs.forEach((r, i) => {
+  const c = document.createElement('div'); c.className = 'c'; c.innerHTML = '<b>' + r.number + '</b>'; g.appendChild(c);
+  const p = createRobotPreview(c, { autoRotate: false }); p.setYaw(+q.get('yaw') || -0.6); p.show(r, i % 2 ? 'red' : 'blue');
+});
+</script></body></html>

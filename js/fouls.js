@@ -2,7 +2,7 @@
 // main.js MUST call tracker.onEvents(sim.drainEvents()) each frame (launch events drive G106).
 import { SIDES, ROBOT, ALLIANCES, opponent, inRect } from './config.js';
 
-const R0 = ROBOT.radius, rad = (r) => r.radius ?? R0, SPACE = 1.83, ESC = 3;
+const R0 = ROBOT.radius, rad = (r) => (r.bumper ? Math.max(r.bumper.lx, r.bumper.lz) / 2 : r.radius ?? R0), SPACE = 1.83, ESC = 3; // rad = bumper half-size
 const touches = (rc, r) => Math.hypot(r.x - Math.max(rc.x0, Math.min(rc.x1, r.x)), r.z - Math.max(rc.z0, Math.min(rc.z1, r.z))) < rad(r);
 const crossed = (r) => (r.alliance === 'blue' ? r.x + rad(r) < 0 : r.x - rad(r) > 0); // robots start in their own scoring zone: blue at +x
 

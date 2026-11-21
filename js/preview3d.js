@@ -12,8 +12,9 @@ function shared() {
   if (R) return R;
   R = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: false });
   R.setClearColor(0x000000, 0);
-  R.toneMapping = THREE.ACESFilmicToneMapping; R.toneMappingExposure = 1.05;
+  R.toneMapping = THREE.ACESFilmicToneMapping; R.toneMappingExposure = 1.3;
   R.outputColorSpace = THREE.SRGBColorSpace;
+  R.shadowMap.enabled = true; R.shadowMap.type = THREE.PCFSoftShadowMap;
   const pm = new THREE.PMREMGenerator(R);
   ENV = pm.fromScene(new RoomEnvironment(), 0.04).texture;
   return R;
@@ -33,14 +34,28 @@ export function createRobotPreview(host, { autoRotate = true, spin = 0.5 } = {})
   const g2 = canvas.getContext('2d');
   const scene = new THREE.Scene();
   scene.environment = (shared(), ENV);
-  const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(3, 6, 4); scene.add(sun);
+  scene.environmentIntensity = 1;
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(2.6, 5.5, 3.2);   // soft key
+  sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024); sun.shadow.radius = 5; sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.01;
+  Object.assign(sun.shadow.camera, { left: -1.6, right: 1.6, top: 1.6, bottom: -1.6, near: 1, far: 14 });
+  scene.add(sun);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3d48, 0.7));
+  const fill = new THREE.DirectionalLight(0xd5e4ff, 0.35); fill.position.set(-4, 3, -2); scene.add(fill);
   const cam = new THREE.PerspectiveCamera(28, 1.6, 0.1, 50);
   const stage = new THREE.Group(); scene.add(stage);
-  const disc = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.05, 0.03, 48), new THREE.MeshStandardMaterial({ color: 0x1b1b1d, roughness: 0.8 }));
-  disc.position.y = -0.016; stage.add(disc);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(1.5, 1.52, 96), new THREE.MeshBasicMaterial({ color: 0xf0c13e, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.05, 0.03, 48), new THREE.MeshStandardMaterial({ color: 0x1d1d20, roughness: 0.85, metalness: 0, envMapIntensity: 0.25 }));
+  disc.position.y = -0.016; disc.receiveShadow = true; stage.add(disc);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(1.5, 1.515, 128), new THREE.MeshBasicMaterial({ color: 0xf0c13e, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
   ring.rotation.x = -Math.PI / 2; ring.position.y = 0.002; stage.add(ring);
   const turntable = new THREE.Group(); stage.add(turntable);
+  let fit = null;
+  function placeCam(aspect) {
+    if (!fit) return;
+    const t = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2));
+    const vHalf = Math.max(fit.y * 0.72, 0.5) + 0.3, hHalf = Math.max(fit.x, fit.z) * 0.66 + 0.05;
+    const d = Math.max(vHalf / t, hHalf / (t * aspect)) * 1.02;
+    cam.position.set(d * 0.55, d * 0.45 + fit.y * 0.1, d * 0.7); cam.lookAt(0, fit.y * 0.42, 0);
+  }
   let model = null, state = null, ticket = 0, visible = true, disposed = false, yaw = -0.6;
   const io = typeof IntersectionObserver !== 'undefined' ? new IntersectionObserver((e) => { visible = e[e.length - 1].isIntersecting; }) : null;
   if (io) io.observe(canvas);
@@ -54,9 +69,8 @@ export function createRobotPreview(host, { autoRotate = true, spin = 0.5 } = {})
     model = createRobotModel(state);
     turntable.add(model.object);
     const box = new THREE.Box3().setFromObject(model.object), size = box.getSize(new THREE.Vector3());
-    const span = Math.max(size.x, size.z, size.y * 1.1, 0.9) + 0.45;
-    const d = span / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2))) * 0.92;
-    cam.position.set(d * 0.55, d * 0.45 + size.y * 0.15, d * 0.7); cam.lookAt(0, size.y * 0.38, 0);
+    fit = size.clone();
+    placeCam(cam.aspect || 1.6);
     if (!raf) raf = requestAnimationFrame(loop);
   }
 
@@ -69,7 +83,7 @@ export function createRobotPreview(host, { autoRotate = true, spin = 0.5 } = {})
     if (autoRotate) yaw += dt * spin;
     turntable.rotation.y = yaw;
     model.update({ ...state, heading: 0 }, dt, false);
-    cam.aspect = w / h; cam.updateProjectionMatrix();
+    if (Math.abs(cam.aspect - w / h) > 1e-3) { cam.aspect = w / h; cam.updateProjectionMatrix(); placeCam(cam.aspect); }
     if (R.domElement.width !== pw || R.domElement.height !== ph) R.setSize(pw, ph, false);
     R.render(scene, cam);
     g2.clearRect(0, 0, pw, ph);
