@@ -2,7 +2,7 @@
 // Always outputs field-frame moveX/moveZ + rotate (tank robots: sim converts; pure turns use `turn`).
 import { FIELD, ROBOT, SIDES, TUBE, ALLIANCES, opponent, inRect } from './config.js';
 
-const R = ROBOT.radius, TAU = Math.PI * 2;
+const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const wrap = (a) => { a %= TAU; return a > Math.PI ? a - TAU : a < -Math.PI ? a + TAU : a; };
 const hyp = Math.hypot;
@@ -34,11 +34,13 @@ export function createBot(robotId, alliance, difficulty = 'normal') {
   function steer(c, gx, gz, o = {}) {
     const { me } = c;
     const d = hyp(gx - me.x, gz - me.z) || 1e-6, ux = (gx - me.x) / d, uz = (gz - me.z) / d;
+    // obstacle repulsion fades out when the goal itself sits next to the obstacle (tube against a wall / platform)
+    const fade = (gd) => clamp(gd / 0.8, 0.15, 1);
     let vx = ux, vz = uz;
     const push = (ax, az, w) => { vx += ax * w; vz += az * w; };
     for (const r of c.S.robots) {
       if (r.id === me.id) continue;
-      const rx = me.x - r.x, rz = me.z - r.z, rd = hyp(rx, rz), range = r.alliance === alliance ? 1.8 : 2.2;
+      const rx = me.x - r.x, rz = me.z - r.z, rd = hyp(rx, rz), range = me.radius + (r.radius ?? ROBOT.radius) + (r.alliance === alliance ? 0.8 : 1.2);
       if (rd >= range || rd < 1e-3) continue;
       const w = Math.min(1.5, (range - rd) / 0.8), ax = rx / rd, az = rz / rd;
       let tx = -az, tz = ax;
@@ -47,20 +49,21 @@ export function createBot(robotId, alliance, difficulty = 'normal') {
     }
     const rects = [...c.zones];
     if (!o.free) {
-      const hl = FIELD.halfL, hw = FIELD.halfW;
-      for (const [dd, ax, az] of [[hl - me.x, -1, 0], [hl + me.x, 1, 0], [hw - me.z, 0, -1], [hw + me.z, 0, 1]]) if (dd < 0.95) push(ax, az, (0.95 - dd) / 0.5);
+      const wm = me.radius + 0.45, hl = FIELD.halfL, hw = FIELD.halfW;
+      for (const [dd, ax, az] of [[hl - me.x, -1, 0], [hl + me.x, 1, 0], [hw - me.z, 0, -1], [hw + me.z, 0, 1]]) if (dd < wm) push(ax, az, ((wm - dd) / 0.5) * fade((ax ? hl - Math.abs(gx) : hw - Math.abs(gz)) - 0.2));
       rects.push(...WALLS, ...(o.noBoxes ? [] : BOXES));
     }
     for (const rc of rects) {
-      const q = rectDist(rc, me.x, me.z);
-      if (q.d < 1 && q.d > 1e-3) push((me.x - q.px) / q.d, (me.z - q.pz) / q.d, (1 - q.d) / 0.5);
+      const q = rectDist(rc, me.x, me.z), zone = c.zones.includes(rc);
+      const zm = me.radius + 0.5;
+      if (q.d < zm && q.d > 1e-3) push((me.x - q.px) / q.d, (me.z - q.pz) / q.d, ((zm - q.d) / 0.5) * (zone ? 1 : fade(rectDist(rc, gx, gz).d - 0.2)));
     }
     const m = hyp(vx, vz) || 1;
     const sp = (o.speed ?? 1) * P.speed * clamp(d / (o.slow ?? 1.2), o.min ?? 0.2, 1);
     const v = { x: (vx / m) * sp, z: (vz / m) * sp };
     for (const zr of c.zones) { // never drive into protected zones
       const q = rectDist(zr, me.x, me.z);
-      if (q.d < 0.62 && q.d > 1e-3) {
+      if (q.d < me.radius + 0.12 && q.d > 1e-3) {
         const nx = (me.x - q.px) / q.d, nz = (me.z - q.pz) / q.d, dot = v.x * nx + v.z * nz;
         if (dot < 0) { v.x -= dot * nx; v.z -= dot * nz; }
       }
@@ -68,7 +71,8 @@ export function createBot(robotId, alliance, difficulty = 'normal') {
     return v;
   }
 
-  const turnTo = (me, ang) => clamp(wrap(ang - me.heading) * 3.5, -1, 1);
+  // yaw-rate P loop (~8/s) with a little damping, tuned for the ~80 ms module lag
+const turnTo = (me, ang) => clamp((wrap(ang - me.heading) * 12 - me.omega * 0.4) / (me.preset.turnRate || 4), -1, 1);
 
   function drive(out, c, v, rot) {
     const m = hyp(v.x, v.z), tank = c.preset.drive === 'tank';
@@ -83,6 +87,13 @@ export function createBot(robotId, alliance, difficulty = 'normal') {
     const { me } = c;
     const dx = sx - me.x, dz = sz - me.z, d = hyp(dx, dz), rot = turnTo(me, ang);
     const there = d < 0.16;
+    if (c.preset.drive === 'tank') { // can't strafe: drive along the heading, bias the heading to absorb lateral error
+      const cs = Math.cos(me.heading), sn = Math.sin(me.heading), f = dx * cs + dz * sn, l = -dx * sn + dz * cs;
+      const th = there ? 0 : clamp(f * 1.8, -0.5, 0.5), tu = turnTo(me, ang + (d > 0.3 ? clamp(l * 1.5, -0.4, 0.4) : 0));
+      out.throttle = th; out.turn = tu; st.lastCmd = Math.abs(th);
+      if (Math.abs(th) > 0.04) st.lastDir = { x: cs * Math.sign(th), z: sn * Math.sign(th) };
+      return there && hyp(me.vx, me.vz) < 0.3 && Math.abs(wrap(ang - me.heading)) < P.aim;
+    }
     const v = there || d < 0.07 ? { x: 0, z: 0 } : { x: (dx / d) * clamp(d * 1.8, 0.14, 0.5), z: (dz / d) * clamp(d * 1.8, 0.14, 0.5) };
     drive(out, c, v, rot);
     return there && hyp(me.vx, me.vz) < 0.3 && Math.abs(wrap(ang - me.heading)) < P.aim;
@@ -177,10 +188,10 @@ export function createBot(robotId, alliance, difficulty = 'normal') {
       const p = tg.p;
       claim(`${alliance}-z${p.index}`, me.id, t);
       if (tg.method === 'launch') {
-        const sx = (wallDir > 0 ? side.scoringZone.x0 : side.scoringZone.x1) + wallDir * (R + 0.3);
+        const sx = (wallDir > 0 ? side.scoringZone.x0 : side.scoringZone.x1) + wallDir * (c.R + 0.3);
         spot = { x: sx, z: p.z }; face = Math.atan2(0, p.tipX - sx); press = 'launch';
       } else {
-        spot = { x: p.tipX - wallDir * clamp(0.65 - st.creep, 0.35, 0.75), z: p.z };
+        spot = { x: p.tipX - wallDir * clamp(c.R + 0.15 - st.creep, c.R + 0.03, c.R + 0.25), z: p.z };
         face = wallDir > 0 ? 0 : Math.PI; press = tg.method === 'upper' ? 'scoreUpper' : 'scoreLower';
       }
     }
@@ -194,7 +205,7 @@ export function createBot(robotId, alliance, difficulty = 'normal') {
     const ready = hold(c, out, spot.x, spot.z, face);
     st.alignT = ready ? st.alignT + c.dt : 0;
     if (ready && st.alignT >= P.react * 0.6 && !me.action && held > 0) {
-      if (press === 'launch' && !inRect(side.scoringZone, me.x, me.z, R)) return out;
+      if (press === 'launch' && !inRect(side.scoringZone, me.x, me.z, c.R)) return out;
       out[press] = true;
       st.waiting = true; st.pressAt = t; st.heldAtPress = held; st.alignT = 0;
     }
@@ -221,7 +232,7 @@ export function createBot(robotId, alliance, difficulty = 'normal') {
       return out;
     }
     if (sup <= 1) {
-      const A = { x: (L2.x0 + L2.x1) / 2, z: zf - faceZ * (R + 0.1) };
+      const A = { x: (L2.x0 + L2.x1) / 2, z: zf - faceZ * (c.R + 0.1) };
       const higher = mates.filter((r) => lvl[r.id] > tgt);
       if (c.remaining > 8 && !higher.every((r) => r.support >= 3)) {
         const wz = faceZ * 1.9, wx = wallDir * 0.5;
@@ -246,10 +257,11 @@ export function createBot(robotId, alliance, difficulty = 'normal') {
   }
 
   function think(sim, match, dt) {
-    const S = sim.state, t = S.time, me = S.robots.find((r) => r.id === robotId), out = {};
+    const S = sim.state, t = S.time, raw = S.robots.find((r) => r.id === robotId), out = {};
+    const me = raw && { radius: ROBOT.radius, omega: 0, ...raw }; // tolerate minimal robot states
     const ph = match.phase;
     if (!me || !(ph === 'auto' || ph === 'teleop' || ph === 'endgame')) return out;
-    const c = { me, S, t, dt, auto: ph === 'auto', endgame: ph === 'endgame', preset: me.preset, remaining: match.remaining,
+    const c = { me, S, t, dt, R: me.radius, auto: ph === 'auto', endgame: ph === 'endgame', preset: me.preset, remaining: match.remaining,
       zones: [oside.scoringZone, oside.loadingZone] };
     if (c.auto) c.zones.push(side.loadingZone);
     if (c.endgame) c.zones.push(oside.platformZone);

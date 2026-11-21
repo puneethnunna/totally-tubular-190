@@ -141,4 +141,38 @@ test('bot smoke: returns Input objects and scores a preload', () => {
   assert.ok(r.x > 6.5 && r.x < 7.7, `final x ${r.x}`);
 });
 
+test('1-6 robots: missing slots score 0, solo/1v1 scoring and fouls work', () => {
+  const sim = mkSim({ robots: [plat('blue', 0, 3, 1), plat('red', 0, 2, 2)] });
+  const s = computeScore(sim, done());
+  assert.deepEqual(s.blue.platform.levels, [0, 3, 0]); assert.equal(s.blue.platform.points, 10);
+  assert.deepEqual(s.red.platform.levels, [0, 0, 2]);
+  const solo = mkSim({ robots: [plat('blue', 0, 4, 0)] });
+  const r = computeScore(solo, done());
+  assert.equal(r.blue.total, 15); assert.equal(r.red.total, 0); assert.equal(r.winner, 'blue');
+  const f = createFoulTracker(); // no opponents: nothing to foul
+  f.update(solo, { phase: 'teleop' }, 0.1); assert.equal(f.list.length, 0);
+});
+
+test('fouls use per-robot radius', () => {
+  const zone = SIDES.red.scoringZone; // blue robot just outside the red zone edge: touches only if its radius is large enough
+  const mk = (radius) => bot('blue-0', 'blue', 0, { radius, x: zone.x0 - 0.55, z: 0, contacts: ['red-0'] });
+  const run = (radius) => {
+    const f = createFoulTracker();
+    f.update({ state: { time: 1, robots: [mk(radius), bot('red-0', 'red', 0, { x: zone.x0 + 0.4, z: 0, contacts: ['blue-0'] })] } }, { phase: 'teleop' }, 0.1);
+    return f.list.some((e) => e.rule === 'G103');
+  };
+  assert.equal(run(0.45), false); assert.equal(run(0.6), true);
+});
+
+test('bots handle solo play and custom radius/tank presets', () => {
+  for (const preset of ROBOT_PRESETS) {
+    const r = bot('blue-0', 'blue', 0, { x: 2, z: 0, heading: 0, radius: 0.6, omega: 0, held: [], preset });
+    const sim = mkSim({ robots: [r] });
+    for (const d of ['easy', 'normal', 'hard']) for (const ph of ['auto', 'teleop', 'endgame']) {
+      const inp = createBot('blue-0', 'blue', d).think(sim, { phase: ph, remaining: ph === 'endgame' ? 10 : 100 }, 1 / 60);
+      for (const v of Object.values(inp)) assert.ok(typeof v === 'boolean' || Number.isFinite(v));
+    }
+  }
+});
+
 console.log(`${n} tests passed`);

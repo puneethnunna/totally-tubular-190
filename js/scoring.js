@@ -59,7 +59,9 @@ export function computeScore(sim, match) {
     }
     const teleop = { floor: tot.floor - auto.floor, lower: tot.lower - auto.lower, upper: tot.upper - auto.upper };
     const levels = platformLevels(S, a, fouls && fouls.forcedLevel4);
-    const slots = S.robots.filter((r) => r.alliance === a).sort((x, y) => x.slot - y.slot).map((r) => levels[r.id]);
+    const mine = S.robots.filter((r) => r.alliance === a); // levels[slot]; empty slots (solo / 1v1 / 2v2) score 0
+    const slots = Array.from({ length: Math.max(3, ...mine.map((r) => r.slot + 1)) }, () => 0);
+    for (const r of mine) slots[r.slot] = levels[r.id];
     const platform = { levels: slots, points: slots.reduce((s, l) => s + POINTS.platform[l], 0), projected: !done };
     const f = { foul: 0, tech: 0, points: 0 };
     for (const e of (fouls && fouls.list) || []) {

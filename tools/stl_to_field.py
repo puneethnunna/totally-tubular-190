@@ -41,15 +41,29 @@ group[post] = 'post'
 station = np.abs(cx) > 8.29
 group[station & (cx < 0)] = 'station-blue'
 group[station & (cx > 0)] = 'station-red'
-panel = (np.abs(cx) >= 8.12) & (np.abs(cx) <= 8.29) & ~post
-group[panel] = 'endwall'
-side = (np.abs(cz) >= 3.80) & (np.abs(cz) <= 3.96) & (hi[:, 1] > 0.05) & ~plat
-group[side] = 'sidewall'
+# --- end walls (x = +-8.23..8.28): the lower 1.194 m of the post wall and the top rail are opaque in the CAD;
+#     the shelf window between them is the glazed part. Triangulated rectangles span whole bands, so use bbox.
+nrm = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0]); area = np.linalg.norm(nrm, axis=1) / 2; nrm /= (2 * area[:, None] + 1e-12)
+curved = np.abs(nrm).max(1) < 0.995                      # torus tubes / pegs / round cutouts: never wall panels
+panel = (np.abs(cx) >= 8.12) & (np.abs(cx) <= 8.29) & ~post & ~curved
+glaze = panel & (lo[:, 1] >= 1.19) & (hi[:, 1] <= 2.42)
+group[panel] = 'postwall'                  # dark opaque lower wall + top rail + dividers
+group[glaze] = 'endwall'                   # clear glazing
+
+# --- long walls: a 5 cm plate at |z| = 3.81..3.86 that steps 0.43 / 1.194 (platform back wall) / 0.22 (chute) /
+#     1.80 (loading end) high. Its big +-z faces are clear polycarbonate; the thin edge faces (top, ends) are aluminum.
+band = (np.abs(cz) >= 3.80) & (np.abs(cz) <= 3.87) & (np.abs(cx) <= 8.28) & (hi[:, 1] > 0.05) & ~plat & ~curved
+flatz = (np.abs(nrm[:, 2]) > 0.99) & (hi[:, 2] - lo[:, 2] < 1e-3)
+tubedec = curved & (area < 0.003) & (hi[:, 1] < 1.2) & (np.abs(cx) > 5.0) & ~post   # decorative CAD tubes sitting in the chutes
+group[tubedec] = 'tubedec'
+group[band & ~flatz] = 'rail'
+group[band & flatz] = 'sidewall'
 chute = (((np.abs(cz) > 3.81) | (np.abs(cx) > 8.23)) & (np.abs(cx) > 5.0)) & (hi[:, 1] < 1.85) & (group == 'structure')
 group[chute] = 'chute'
 group[hi[:, 1] <= 1e-4] = 'base'                                            # floor plate layers under the carpet
 group[(np.abs(hi[:, 1]) <= 1e-5) & (np.abs(lo[:, 1]) <= 1e-5) & (ax <= 8.231) & (az <= 3.811)] = 'floor'  # carpet top, zones painted on
 
+drop |= group == 'tubedec'      # the sim draws live tubes in the chutes; the CAD's 6 tori are ~300k triangles
 keep = ~drop
 T, group = T[keep], group[keep]
 order = np.argsort(group, kind='stable'); T, group = T[order], group[order]

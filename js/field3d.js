@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FIELD, SIDES, ALLIANCES, TUBE } from './config.js';
 import { getTubeAssets } from './models.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.05, ...o });
 const glass = (color, op) => std(color, { transparent: true, opacity: op, roughness: 0.15, metalness: 0.1, depthWrite: false });
@@ -87,23 +88,55 @@ function buildChute(c, color) {
 // or for good if it can't be fetched.
 const FIELD_URL = new URL('../assets/field.bin', import.meta.url);
 
+// Groups drawn as clear polycarbonate: no shadows, no depth write, rendered after the opaque pass.
+const CLEAR = new Set(['endwall', 'sidewall']);
+
 function fieldMaterials() {
-  const metal = std(0xd5d9de, { metalness: 0.8, roughness: 0.3 });
-  const clear = (c, op) => std(c, { transparent: true, opacity: op, roughness: 0.1, metalness: 0.1, depthWrite: false, side: THREE.DoubleSide });
+  const alu = (c = 0xc3c8cf) => new THREE.MeshStandardMaterial({ color: c, metalness: 0.55, roughness: 0.42 });
+  const clear = (c, op) => new THREE.MeshPhysicalMaterial({
+    color: c, transparent: true, opacity: op, roughness: 0.06, metalness: 0, ior: 1.5, reflectivity: 0.6,
+    clearcoat: 0.6, clearcoatRoughness: 0.05, envMapIntensity: 1.3, depthWrite: false, side: THREE.DoubleSide,
+  });
   const ally = (a, f = 0) => std(lighten(SIDES[a].color, f), { roughness: 0.55 });
   return {
-    structure: std(0x6b7079, { roughness: 0.6, metalness: 0.2 }),
-    floor: new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 1 }),
+    structure: alu(0xbfc4cb),
+    rail: alu(0xd2d6dc),
+    floor: new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 1, side: THREE.DoubleSide }),
     base: std(0x23262d, { roughness: 0.95 }),
-    chute: std(0x585c63, { roughness: 0.6 }),
-    endwall: clear(0xdfeaf2, 0.22),
-    sidewall: clear(0xe9f1f6, 0.3),
-    post: metal,
+    chute: std(0x3f4349, { roughness: 0.6, metalness: 0.15 }),
+    postwall: std(0x3a3d43, { roughness: 0.6, metalness: 0.1 }),
+    endwall: clear(0xcfe3ee, 0.2),
+    sidewall: clear(0xd8e8f0, 0.16),
+    post: new THREE.MeshStandardMaterial({ color: 0xe3e6ea, metalness: 0.9, roughness: 0.25 }),
     ...Object.fromEntries(['blue', 'red'].flatMap((a) => [2, 3, 4].map((L) => [`platform-${a}-${L}`, ally(a, 0.06 + (L - 2) * 0.16)]))),
     'wall-blue': ally('blue'), 'wall-red': ally('red'),
-    'station-blue': std(new THREE.Color(SIDES.blue.color).multiplyScalar(0.55), { roughness: 0.7 }),
-    'station-red': std(new THREE.Color(SIDES.red.color).multiplyScalar(0.55), { roughness: 0.7 }),
+    'station-blue': std(new THREE.Color(SIDES.blue.color).multiplyScalar(0.5), { roughness: 0.6, metalness: 0.2 }),
+    'station-red': std(new THREE.Color(SIDES.red.color).multiplyScalar(0.5), { roughness: 0.6, metalness: 0.2 }),
   };
+}
+
+// Long-wall plate heights along x for the +z side (the -z side is the (x,z)->(-x,-z) mirror), from the CAD.
+const LONG_WALL = [[-8.23, -1.83, 0.432], [-1.83, 1.83, 1.194], [1.83, 5.18, 0.432], [5.18, 7.21, 0.216], [7.21, 8.23, 1.803]];
+
+// Thin aluminum framing on the clear long walls: top + bottom rails and uprights at every height step.
+function longWallFrame() {
+  const parts = [], bx = (w, h, d, x, y, z) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); parts.push(g); };
+  for (const sg of [1, -1]) {
+    const z = sg * 3.835, segs = LONG_WALL.map(([a, b, h]) => (sg > 0 ? [a, b, h] : [-b, -a, h])).sort((p, q) => p[0] - q[0]);
+    for (const [a, b, h] of segs) {
+      bx(b - a, 0.05, 0.1, (a + b) / 2, h + 0.025, z);
+      bx(b - a, 0.06, 0.1, (a + b) / 2, 0.03, z);
+    }
+    for (let i = 0; i <= segs.length; i++) {
+      const x = i === 0 ? segs[0][0] : segs[i - 1][1], h = Math.max(i > 0 ? segs[i - 1][2] : 0, i < segs.length ? segs[i][2] : 0);
+      bx(0.07, h + 0.05, 0.1, x, (h + 0.05) / 2, z);
+    }
+    // mid-span uprights on the long low sections so the panels read as framed lites
+    for (const [a, b, h] of segs) if (b - a > 3.2) for (let k = 1; k < Math.round((b - a) / 1.6); k++) { const x = a + ((b - a) * k) / Math.round((b - a) / 1.6); bx(0.05, h, 0.09, x, h / 2, z); }
+  }
+  const m = new THREE.Mesh(mergeGeometries(parts), new THREE.MeshStandardMaterial({ color: 0xd5d9df, metalness: 0.6, roughness: 0.38 }));
+  m.name = 'long-wall-frame'; m.castShadow = true; m.receiveShadow = true;
+  return m;
 }
 
 // Paints the zones onto the CAD carpet face. UV (0,0) is the field corner at (-halfL, -halfW).
@@ -143,25 +176,45 @@ export async function loadFieldModel(url = FIELD_URL) {
   const pos = new Float32Array(q.length);
   for (let i = 0; i < q.length; i++) pos[i] = q[i] * head.scale;
   const idxOff = 8 + hlen + q.byteLength + (q.byteLength % 4);
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const idx = new Uint32Array(buf, idxOff, head.tris * 3);
+  const full = new THREE.BufferGeometry();
+  full.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   const uv = new Float32Array(head.verts * 2);   // top-down projection, only the floor material samples it
   for (let i = 0; i < head.verts; i++) {
     uv[i * 2] = (pos[i * 3] + FIELD.halfL) / FIELD.length;
     uv[i * 2 + 1] = (pos[i * 3 + 2] + FIELD.halfW) / FIELD.width;
   }
-  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(buf, idxOff, head.tris * 3), 1));
-  const mats = fieldMaterials(), list = [];
-  for (const [name, start, count] of head.groups) {
-    const m = mats[name] || mats.structure; if (name !== 'floor') m.flatShading = true;
-    let i = list.indexOf(m); if (i < 0) i = list.push(m) - 1;
-    geo.addGroup(start, count, i);
+  full.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  full.setIndex(new THREE.BufferAttribute(idx, 1));
+  full.computeVertexNormals();   // flat-shaded parts ignore these; the floor (no flat shading) is fixed below
+  const nrm = full.getAttribute('normal');
+  for (const [name, start, count] of head.groups) if (name === 'floor' || name === 'base')
+    for (let i = start; i < start + count; i++) nrm.setXYZ(idx[i], 0, 1, 0);
+
+  const mats = fieldMaterials();
+  const out = new THREE.Group(); out.name = 'field-cad';
+  for (const clearPass of [false, true]) {
+    const list = [], chunks = [], groups = []; let n = 0;
+    for (const [name, start, count] of head.groups) {
+      if (CLEAR.has(name) !== clearPass) continue;
+      const m = mats[name] || mats.structure; if (name !== 'floor') m.flatShading = true;
+      let i = list.indexOf(m); if (i < 0) i = list.push(m) - 1;
+      chunks.push(idx.subarray(start, start + count)); groups.push([n, count, i]); n += count;
+    }
+    if (!n) continue;
+    const ia = new Uint32Array(n); let o = 0; for (const c of chunks) { ia.set(c, o); o += c.length; }
+    const geo = new THREE.BufferGeometry();
+    for (const k of ['position', 'uv', 'normal']) geo.setAttribute(k, full.getAttribute(k));
+    geo.setIndex(new THREE.BufferAttribute(ia, 1));
+    for (const [st, c, mi] of groups) geo.addGroup(st, c, mi);
+    geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, list);
+    mesh.name = clearPass ? 'field-cad-clear' : 'field-cad-solid';
+    mesh.castShadow = !clearPass; mesh.receiveShadow = true; mesh.renderOrder = clearPass ? 2 : 0;
+    out.add(mesh);
   }
-  geo.computeBoundingSphere();
-  const mesh = new THREE.Mesh(geo, list);
-  mesh.name = 'field-cad'; mesh.castShadow = true; mesh.receiveShadow = true;
-  return mesh;
+  out.add(longWallFrame());
+  return out;
 }
 
 export function buildField(scene) {
@@ -227,36 +280,84 @@ export function buildField(scene) {
     }
   }
 
-  // arena backdrop: bleachers along the long sides with instanced crowd
-  const stand = std(0x555a66, { roughness: 0.8 });
-  const crowdGeo = new THREE.BoxGeometry(0.3, 0.55, 0.25);
-  const seats = [];
+  // arena backdrop: open steel bleachers along both long sides, sparse clustered crowd. Nothing here
+  // overlaps the CAD footprint (|x| <= 8.75, |z| <= 4.33): the nearest bleacher rail is at |z| = 5.7.
+  const stands = new THREE.Group(); stands.name = 'stands'; group.add(stands);
+  buildStands(stands);
+  // far walls + end curtains stay well outside the field
   for (const s of [-1, 1]) {
-    for (let i = 0; i < 6; i++) {
-      const zc = s * (6.0 + i * 1.0), hh = 0.4 * (i + 1) + 0.2;
-      group.add(box(34, hh, 1.0, stand, 0, hh / 2 - 0.03, zc));
-      for (let x = -16; x <= 16; x += 0.42) if (Math.random() < 0.78) seats.push([x + (Math.random() - 0.5) * 0.1, hh + 0.27, zc + s * 0.05]);
-    }
-    group.add(box(44, 9, 0.5, std(0x1a1d27, { roughness: 0.9 }), 0, 4.5, s * 14));         // back wall
-    group.add(box(44, 0.8, 0.52, std(SIDES[s < 0 ? 'blue' : 'red'].color, { roughness: 0.6 }), 0, 6.2, s * 13.7)); // banner
-    group.add(box(44, 0.15, 1.5, std(0x2c3040), 0, 0.25, s * 5.2)); // curb, kept outside the CAD footprint (|z| > 4.33)
+    stands.add(box(60, 11, 0.5, std(0x151822, { roughness: 0.9 }), 0, 5.5, s * 17));
+    stands.add(box(60, 0.9, 0.52, std(SIDES[s < 0 ? 'blue' : 'red'].color, { roughness: 0.6 }), 0, 7.2, s * 16.7));
+    stands.add(box(0.5, 11, 36, std(0x12141c, { roughness: 0.9 }), s * 27, 5.5, 0, false));
   }
-  const crowd = new THREE.InstancedMesh(crowdGeo, new THREE.MeshStandardMaterial({ roughness: 0.9 }), seats.length);
-  const mtx = new THREE.Matrix4(), col = new THREE.Color();
-  seats.forEach((p, i) => {
-    mtx.makeTranslation(p[0], p[1], p[2]); crowd.setMatrixAt(i, mtx);
-    col.setHSL(Math.random(), 0.35, 0.12 + Math.random() * 0.2); crowd.setColorAt(i, col);
-  });
-  crowd.castShadow = false; crowd.receiveShadow = false;
-  group.add(crowd);
-  // end curtains
-  for (const s of [-1, 1]) group.add(box(0.5, 9, 40, std(0x161922), s * 24, 4.5, 0, false));
 
   scene.add(group);
-  const result = { group, carpet, postWalls: post, crowd, cad: null };
+  const result = { group, carpet, postWalls: post, stands, crowd: stands.userData.crowd, cad: null };
   result.ready = loadFieldModel().then((mesh) => {
     group.remove(standIn); group.add(mesh); result.cad = mesh;
     return mesh;
   }).catch((e) => { console.warn('Field CAD not loaded, using stand-in geometry:', e.message); return null; });
   return result;
+}
+
+function rng(seed) { // mulberry32: spectators/seat layout is the same every load
+  return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+// Frsim-style bleachers: per row two seat planks, a footboard, a back rail, uprights and a stringer, all one
+// InstancedMesh of unit boxes. Spectators: ~30% of seats, in a few clusters, as two instanced meshes.
+function buildStands(stands) {
+  const R = rng(20260101), steel = new THREE.MeshStandardMaterial({ color: 0xaab0b8, metalness: 0.7, roughness: 0.4 });
+  const ROWS = 8, X0 = -17, X1 = 17, PITCH = 2.4, rows = [];
+  const beams = [];   // [sx, sy, sz, x, y, z]
+  for (const s of [-1, 1]) for (let i = 0; i < ROWS; i++) {
+    const z = s * (6.0 + i * 0.85), h = 0.38 + i * 0.42;
+    rows.push({ s, z, h });
+    beams.push([X1 - X0, 0.04, 0.26, 0, h, z - s * 0.05]);              // seat plank
+    beams.push([X1 - X0, 0.04, 0.2, 0, h - 0.02, z + s * 0.21]);        // seat plank 2
+    beams.push([X1 - X0, 0.04, 0.3, 0, h - 0.4, z - s * 0.5]);          // footboard of the row below
+    beams.push([X1 - X0, 0.05, 0.05, 0, h + 0.45, z + s * 0.36]);       // back rail
+    beams.push([X1 - X0, 0.04, 0.04, 0, h + 0.2, z + s * 0.36]);        // mid rail
+    for (let x = X0; x <= X1 + 0.01; x += PITCH) {
+      beams.push([0.05, h + 0.45, 0.05, x, (h + 0.45) / 2, z + s * 0.36]);  // upright
+      beams.push([0.04, 0.04, 0.88, x, h - 0.06, z]);                       // cross tie
+    }
+  }
+  for (const s of [-1, 1]) for (let x = X0; x <= X1 + 0.01; x += PITCH) {   // raking stringers
+    const z0 = s * 5.6, z1 = s * (6.0 + (ROWS - 1) * 0.85 + 0.4), h1 = 0.38 + (ROWS - 1) * 0.42 - 0.06;
+    const len = Math.hypot(z1 - z0, h1), a = Math.atan2(h1, Math.abs(z1 - z0));
+    beams.push([0.05, 0.05, len, x, h1 / 2, (z0 + z1) / 2, -a * s]);
+  }
+  const bm = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), steel, beams.length);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3(), ax = new THREE.Vector3(1, 0, 0);
+  beams.forEach((b, i) => {
+    q.setFromAxisAngle(ax, b[6] ? b[6] : 0);
+    m4.compose(p.set(b[3], b[4], b[5]), q, sc.set(b[0], b[1], b[2])); bm.setMatrixAt(i, m4);
+  });
+  bm.instanceMatrix.needsUpdate = true; bm.castShadow = false; bm.receiveShadow = false; bm.frustumCulled = false;
+  stands.add(bm);
+
+  // seats -> clustered pick of ~30%
+  const seats = [];
+  for (const r of rows) for (let x = X0 + 0.4; x < X1; x += 0.46) seats.push({ x, r, sc: 0 });
+  const cl = []; for (let i = 0; i < 14; i++) cl.push({ x: X0 + R() * (X1 - X0), s: R() < 0.5 ? -1 : 1, row: R() * ROWS, w: 1.5 + R() * 3, rw: 1 + R() * 2 });
+  for (const t of seats) {
+    const row = Math.round((t.r.z * t.r.s - 6.0) / 0.85);
+    t.sc = R() * 0.55;
+    for (const c of cl) if (c.s === t.r.s) t.sc += Math.exp(-(((t.x - c.x) / c.w) ** 2 + ((row - c.row) / c.rw) ** 2));
+  }
+  seats.sort((a, b) => b.sc - a.sc);
+  const crowd = seats.slice(0, Math.round(seats.length * 0.3));
+  const body = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.5, 0.22), new THREE.MeshStandardMaterial({ roughness: 0.9 }), crowd.length);
+  const headM = new THREE.InstancedMesh(new THREE.SphereGeometry(0.1, 8, 6), new THREE.MeshStandardMaterial({ roughness: 0.8, color: 0xd9b59b }), crowd.length);
+  const col = new THREE.Color(), skin = [0xe0b99f, 0xc68e6b, 0x8d5a3b, 0xf1cdb4, 0x6b4430];
+  crowd.forEach((t, i) => {
+    const y = t.r.h + 0.02;
+    body.setMatrixAt(i, m4.makeTranslation(t.x, y + 0.27, t.r.z + t.r.s * 0.15));
+    headM.setMatrixAt(i, m4.makeTranslation(t.x, y + 0.62, t.r.z + t.r.s * 0.15));
+    col.setHSL(R(), 0.3, 0.06 + R() * 0.16); body.setColorAt(i, col);
+    headM.setColorAt(i, col.setHex(skin[(R() * skin.length) | 0]));
+  });
+  for (const m of [body, headM]) { m.instanceMatrix.needsUpdate = true; m.frustumCulled = false; stands.add(m); }
+  stands.userData.crowd = body;
 }

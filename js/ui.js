@@ -1,14 +1,58 @@
-// Screens, HUD, toasts, results. Keyboard-navigable "layers" (↑↓ move, ←→ adjust, Enter select, Esc back).
-import { SIDES, ROBOT_PRESETS, ROBOT, FIELD, DEFAULT_TEAMS, POINTS, TIMING, RP, TUBE, opponent, inRect } from './config.js';
+// Menus, setup flow, HUD, pause, results. Keyboard "layers": ↑↓ move, ←→ adjust, Enter select, Esc back.
+// Optional modules (robots / preview3d / importDialog) are imported dynamically with graceful fallbacks.
+import { SIDES, ROBOT_PRESETS, ROBOT, FIELD, POINTS, TIMING, RP, TUBE, opponent } from './config.js';
+import { ACTIONS, DEFAULT_KEYS, keyLabel } from './input.js';
 
+const opt = (p) => import(p).catch((e) => { console.warn('optional module', p, e.message); return null; });
+const [RBM, PV, IMP] = await Promise.all([opt('./robots.js'), opt('./preview3d.js'), opt('./importDialog.js')]);
+
+// ---------- settings ----------
 const KEY = 'tt-settings';
-export const DEFAULTS = { quality: 'high', camera: 'driver', fieldRelative: true, autoHP: true, team: '', difficulty: 'normal', midfield: 8 };
-export const loadSettings = () => { try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { return { ...DEFAULTS }; } };
+export const DEFAULTS = { quality: 'high', background: true, camera: 'driver', cameraFollow: 'smooth', hideGui: false, fieldRelative: true, autoHP: true,
+  driverName: '', volume: 100, speeds: [40, 70, 100], midfield: 8, difficulty: 'normal', mode: '1v1', alliance: 'blue', robotId: '', keys: {} };
+export function loadSettings() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
+  s = { ...DEFAULTS, ...s };
+  if (s.camera === 'chase') s.camera = 'third';
+  if (!['driver', 'third', 'first'].includes(s.camera)) s.camera = 'driver';
+  if (!Array.isArray(s.speeds) || s.speeds.length !== 3) s.speeds = [...DEFAULTS.speeds];
+  return s;
+}
 export const saveSettings = (s) => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {} };
+
+// ---------- robots (with fallback to ROBOT_PRESETS) ----------
+const NUMS = ['1678', '254', '971', '2910', '118', '1323'];
+const FALLBACK = ROBOT_PRESETS.map((p, i) => ({ id: 'builtin-' + p.id, number: NUMS[i % NUMS.length], name: p.name, team: p.name, place: 'Fictional team', source: 'builtin', preset: p, stats: null }));
+const roster = () => (RBM?.ROSTER?.length ? RBM.ROSTER : FALLBACK);
+let ALL = roster().slice();
+export async function refreshRobots() {
+  try { ALL = RBM?.listRobots ? await RBM.listRobots() : roster().slice(); } catch (e) { console.warn(e); ALL = roster().slice(); }
+  return ALL;
+}
+const findRobot = (id) => ALL.find((r) => r.id === id) || roster().find((r) => r.id === id) || roster()[0];
+export async function ensureMeshes(defs) { try { await RBM?.ensureMeshes?.(defs); } catch (e) { console.warn('ensureMeshes', e); } }
+
+function specRows(def) {
+  const p = def.preset || {}, s = def.stats || {};
+  const sp = s.speedFtS ?? p.maxSpeed * 3.281, ac = s.accelFtS2 ?? p.accel * 5.25, push = s.pushLb ?? (p.mass || 61) * 2.205, ir = s.intakeRate ?? 1 / (p.intakeTime || 0.25);
+  return [['Speed', `${(+sp).toFixed(1)} ft/s`, sp / 18], ['Acceleration', `${Math.round(ac)} ft/s²`, ac / 45], ['Push', `${Math.round(push)} lb`, push / 200],
+    ['Intake rate', `${(+ir).toFixed(1)} /s`, ir / 8], ['Place time', `${p.placeTime}s`, 1 - (p.placeTime - 0.3) / 0.9], ['Climb', `Level ${p.maxClimb}`, p.maxClimb / 4],
+    ['Reach', p.canUpper ? 'Upper + lower' : p.canLaunch ? 'Launcher' : 'Lower', p.canUpper ? 1 : p.canLaunch ? 0.7 : 0.5], ['Capacity', s.capacity || '2 tubes', 1]];
+}
+const tagsOf = (def) => def.stats?.tags || [def.preset.drive, def.preset.canUpper ? 'upper posts' : 'lower posts', def.preset.canLaunch ? 'launches' : '', `climbs L${def.preset.maxClimb}`].filter(Boolean);
+const specHTML = (def) => `<div class="sgrid">${specRows(def).map(([l, v, f]) => { const n = Math.max(0, Math.min(10, Math.round(f * 10)));
+  return `<div class="sp1"><div class="spl"><span>${l}</span>${v}</div><div class="sbar">${Array.from({ length: 10 }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</div></div>`; }).join('')}</div>
+  <div class="tags">${tagsOf(def).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>`;
+
+// ---------- helpers ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
-const hint = (...p) => `<div class="foot">${p.map(([k, t]) => `<span class="hint"><b>${k}</b>${t}</span>`).join('')}</div>`;
+const hint = (...p) => `<div class="foot">${p.map(([k, t]) => `<span><span class="kbd">${k}</span>${t}</span>`).join('')}</div>`;
 const pad2 = (n) => String(n).padStart(2, '0');
+const topbar = (crumb) => `<div class="top"><div class="wm"><i class="tico"></i>TOTALLY TUBULAR</div>${crumb ? `<span class="crumb">${crumb}</span>` : ''}</div>`;
+const CRUMB = '2026 Totally Tubular';
+const CAMNAME = { driver: 'Driver station', third: 'Third person', first: 'First person' };
 
 // Legal start for a robot's centre: bumpers inside own SCORING ZONE, outside own LEVEL 1 area (G109).
 export function clampStart(alliance, x, z) {
@@ -16,6 +60,19 @@ export function clampStart(alliance, x, z) {
   x = Math.max(zn.x0 + R, Math.min(zn.x1 - R, x)); z = Math.max(zn.z0 + R, Math.min(zn.z1 - R, z));
   if (x > f.x0 - R && x < f.x1 + R && z > f.z0 - R && z < f.z1 + R) x = f.x0 > zn.x0 ? f.x0 - R : f.x1 + R;
   return { x, z };
+}
+
+// Robot preview host wrapper: real preview3d if available, else a number/name placeholder.
+function makePreview(host) {
+  let pv = null;
+  try { pv = PV?.createRobotPreview?.(host) || null; } catch (e) { console.warn('preview3d', e); }
+  return {
+    show(def, alliance) {
+      if (pv) { try { pv.show(def, alliance); return; } catch (e) { console.warn(e); pv = null; } }
+      host.innerHTML = `<div class="pvph"><b>${esc(def.number)}</b><span>${esc(def.name)}</span></div>`;
+    },
+    dispose() { try { pv?.dispose?.(); } catch {} host.textContent = ''; },
+  };
 }
 
 export function createUI(app) {
@@ -27,27 +84,32 @@ export function createUI(app) {
   // ---------- layer / focus engine ----------
   const stack = [];
   const top = () => stack[stack.length - 1];
+  let capturing = null;
   function focus(L, i) {
+    if (!L.items.length) return;
     L.i = (i + L.items.length) % L.items.length;
     L.items.forEach((it, k) => it.el.classList.toggle('focus', k === L.i));
     L.items[L.i].el.scrollIntoView?.({ block: 'nearest' });
+    L.items[L.i].onFocus?.();
   }
+  const SELF = '.sg,input,.lc,.tabs button,.kc,.tg b,.del,.car';
   function reg(items) {
     for (const it of items) {
       if (it.bound) continue; it.bound = true;
       it.el.addEventListener('click', (e) => {
         const L = stack.find((l) => l.items.includes(it)); if (!L) return;
         focus(L, L.items.indexOf(it));
-        if (!e.target.closest('.chip,input,button.sub')) it.activate?.();
+        if (it.onClick) it.onClick(e); else if (!e.target.closest(SELF)) it.activate?.();
       });
-      it.el.addEventListener('mouseenter', () => { const L = top(); if (L?.items.includes(it)) focus(L, L.items.indexOf(it)); });
+      it.el.addEventListener('mouseenter', () => { const L = top(); if (L && !L.noHover && L.items.includes(it)) focus(L, L.items.indexOf(it)); });
     }
   }
   const pushLayer = (L) => { reg(L.items); L.i = L.i ?? 0; stack.push(L); focus(L, L.i); return L; };
   const popLayer = () => { stack.pop(); const t = top(); if (t) focus(t, t.i); };
+  const setItems = (L, items, i = 0) => { L.items = items; reg(items); focus(L, i); };
   addEventListener('keydown', (e) => {
-    const L = top(); if (!L) return;
-    if (e.target?.tagName === 'INPUT') { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); return; }
+    const L = top(); if (!L || L.passthrough || capturing) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || '')) { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); return; }
     if (L.onKey?.(e)) return e.preventDefault();
     const k = e.key, it = L.items[L.i];
     if (k === 'ArrowUp') focus(L, L.i - 1);
@@ -59,155 +121,295 @@ export function createUI(app) {
     else return;
     e.preventDefault();
   });
+  addEventListener('keydown', (e) => {
+    if (!capturing) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    capturing.done(e.key === 'Escape' ? null : e.key === 'Backspace' ? '' : e.code);
+  }, true);
 
   // ---------- builders ----------
-  const chipsRow = (label, opts, get, set, cls = '') => {
-    const el = h(`<div class="card row"><span class="lab">${label}</span><div class="chips">${opts.map((o, i) => `<button class="chip ${o.c || ''}" data-i="${i}">${o.t}</button>`).join('')}</div></div>`);
-    const paint = () => el.querySelectorAll('.chip').forEach((c, i) => c.classList.toggle('sel', opts[i].v === get()));
+  const seg = (label, opts, get, set) => {
+    const el = h(`<div class="card row"><span class="lab">${label}</span><div class="segs">${opts.map((o, i) => `<button class="sg ${o.c || ''}" data-i="${i}">${o.t}</button>`).join('')}</div></div>`);
+    const paint = () => el.querySelectorAll('.sg').forEach((c, i) => c.classList.toggle('sel', opts[i].v === get()));
     const step = (d) => { const i = opts.findIndex((o) => o.v === get()); set(opts[(i + d + opts.length) % opts.length].v); paint(); };
-    el.querySelectorAll('.chip').forEach((c, i) => c.addEventListener('click', () => { set(opts[i].v); paint(); }));
+    el.querySelectorAll('.sg').forEach((c, i) => c.addEventListener('click', () => { set(opts[i].v); paint(); }));
     paint(); return { el, adjust: step, activate: () => step(1), paint };
   };
   const btn = (label, fn, cls = '') => { const el = h(`<button class="btn ${cls}">${label}</button>`); return { el, activate: fn }; };
-  const screens = {};
-  const mkScreen = (name, html) => { const el = h(`<div class="screen ${name}">${html}</div>`); $ui.appendChild(el); screens[name] = el; return el; };
+  const screens = {}, hooks = {};
+  const mkScreen = (name, html, cls = '') => { const el = h(`<div class="screen ${name} ${cls}">${html}</div>`); $ui.appendChild(el); screens[name] = el; return el; };
   const hist = [];
-  let cur = null;
+  let cur = null, fromPause = false, pauseInfo = null;
   function show(name, push = true) {
-    if (cur && push && cur !== name) hist.push(cur);
-    cur = name; stack.length = 0; $ov.innerHTML = '';
+    if (cur && push && cur !== name && cur !== 'none') hist.push(cur);
+    if (cur) hooks[cur]?.leave?.();
+    cur = name; stack.length = 0; $ov.innerHTML = ''; capturing = null;
     Object.entries(screens).forEach(([k, el]) => el.classList.toggle('on', k === name));
-    ({ home: homeLayer, setup: setupLayer, rules: rulesLayer, settings: settingsLayer })[name]?.();
+    hooks[name]?.enter?.();
   }
-  const goBack = () => { const p = hist.pop() || 'home'; show(p, false); };
+  const goBack = () => {
+    if (fromPause) { fromPause = false; show('none', false); return showPause(pauseInfo); }
+    show(hist.pop() || 'home', false);
+  };
+
+  // ---------- pick a game ----------
+  const pickEl = mkScreen('pick', `${topbar()}<h1 class="ptitle">Pick a game</h1><div class="pgrid">
+    <div class="gcard"><i class="tubeart"></i><div><div class="yr">2026</div><div class="gn hf">Totally<br>Tubular</div><div class="gf"><span class="btn sm">Play →</span></div></div></div>
+    <div class="gcard ghost"><i class="tubeart b"></i><div><div class="yr">Next season</div><div class="gn hf">Coming<br>soon</div></div></div>
+    <div class="gcard ghost"><div><div class="yr">Next season</div><div class="gn hf">Coming<br>soon</div></div></div></div>${hint(['←→', 'Choose'], ['Enter', 'Play'])}`, 'bg');
+  const pickItem = { el: pickEl.querySelector('.gcard'), activate: () => show('home') };
+  hooks.pick = { enter: () => { hist.length = 0; pushLayer({ items: [pickItem], horizontal: true }); } };
+
+  // ---------- state shared by home / setup / picker ----------
+  const S = { mode: st.mode, alliance: st.alliance, robotId: st.robotId, diff: st.difficulty, start: null, cpuA: [], cpuO: [] };
+  const NAME = () => st.driverName || 'Driver';
+  const counts = () => ({ solo: { ally: 0, opp: 0 }, '1v1': { ally: 0, opp: 1 }, '2v2': { ally: 1, opp: 2 }, '3v3': { ally: 2, opp: 3 }, local: { ally: 0, opp: 1 } }[S.mode] || { ally: 0, opp: 1 });
+  const myRobot = () => findRobot(S.robotId || roster()[0].id);
 
   // ---------- home ----------
-  const homeEl = mkScreen('home', `<div class="wrap"><div class="kicker">FRC MOCK GAME SIMULATOR</div><h1>TOTALLY<br><span>TUBULAR</span></h1><ul class="menu"></ul></div>${hint(['↑↓', 'Move'], ['Enter', 'Select'], ['Esc', 'Back'])}<div class="errbox"></div>`);
-  const homeItems = [['SINGLEPLAYER', () => openSetup('single')], ['LOCAL 2-PLAYER', () => openSetup('local')], ['RULES', () => show('rules')], ['CONTROLS / SETTINGS', () => show('settings')]]
-    .map(([t, fn], i) => { const el = h(`<li class="mi"><span class="n">0${i + 1}</span>${t}</li>`); homeEl.querySelector('.menu').appendChild(el); return { el, activate: fn }; });
-  const homeLayer = () => pushLayer({ items: homeItems, i: 0 });
+  const homeEl = mkScreen('home', `${topbar(CRUMB)}
+    <div class="hl"><div class="eyebrow">2026 season</div><h1 class="htitle">Totally<br>Tubular</h1><ul class="hmenu"></ul>
+      <div class="namecard"><i class="av"></i><label>Driver name<input class="dn" maxlength="24" placeholder="Driver"></label></div></div>
+    <div class="hr"><div class="pvbox"></div><button class="car l">‹</button><button class="car r">›</button>
+      <div class="hinfo"><div class="bn hf"></div><div><strong></strong><small></small></div><div class="pager"><div class="pb"><i></i></div><span class="pn1"></span></div></div></div>
+    ${hint(['↑↓', 'Move'], ['←→', 'Robots'], ['Enter', 'Select'])}`, 'bg');
+  const homeMenu = homeEl.querySelector('.hmenu');
+  const dn = homeEl.querySelector('.dn'), av = homeEl.querySelector('.av');
+  const paintName = () => { av.textContent = NAME()[0]; };
+  dn.addEventListener('input', () => { st.driverName = dn.value; paintName(); saveSettings(st); });
+  const homeItems = [['Play', () => show('setup')], ['Import robot', () => runImport(async (d) => { S.robotId = st.robotId = d.id; saveSettings(st); show('setup'); })],
+    ['Rules', () => show('rules')], ['Settings', () => show('settings')], ['Change game', () => show('pick')]]
+    .map(([t, fn]) => { const el = h(`<li class="mi">${t}</li>`); homeMenu.appendChild(el); return { el, activate: fn }; });
+  const nameItem = { el: homeEl.querySelector('.namecard'), activate: () => dn.focus() };
+  let hi = 0, hpv = null, htimer = 0;
+  function homeShow(d = 0) {
+    const L = roster(); hi = (hi + d + L.length) % L.length; const r = L[hi];
+    hpv?.show(r, S.alliance);
+    homeEl.querySelector('.bn').textContent = r.number;
+    homeEl.querySelector('.hinfo strong').textContent = r.name;
+    homeEl.querySelector('.hinfo small').textContent = r.place || r.team || '';
+    homeEl.querySelector('.pb i').style.width = `${((hi + 1) / L.length) * 100}%`;
+    homeEl.querySelector('.pn1').textContent = `${hi + 1}/${L.length}`;
+    clearInterval(htimer); htimer = setInterval(() => homeShow(1), 7000);
+  }
+  homeEl.querySelector('.car.l').addEventListener('click', () => homeShow(-1));
+  homeEl.querySelector('.car.r').addEventListener('click', () => homeShow(1));
+  hooks.home = {
+    enter() {
+      dn.value = st.driverName; paintName(); hpv = makePreview(homeEl.querySelector('.pvbox')); homeShow(0);
+      pushLayer({ items: [...homeItems, nameItem], back: () => show('pick'), onKey: (e) => { if (e.key === 'ArrowLeft') return homeShow(-1) || true; if (e.key === 'ArrowRight') return homeShow(1) || true; } });
+    },
+    leave() { clearInterval(htimer); hpv?.dispose(); hpv = null; },
+  };
+
+  // ---------- import (home / picker) ----------
+  async function runImport(after) {
+    if (!IMP?.openImportDialog) return toast('Robot import is not available in this build', { tag: '!' });
+    const L = pushLayer({ items: [{ el: h('<i></i>') }], passthrough: true });
+    let def = null;
+    try { def = await IMP.openImportDialog(document.body); } catch (e) { console.error(e); toast('Import failed: ' + e.message, { tag: '!' }); }
+    stack.splice(stack.indexOf(L), 1); const t = top(); if (t) focus(t, t.i);
+    if (def) { await refreshRobots(); await after?.(def); }
+  }
 
   // ---------- setup ----------
-  const S = { mode: 'single', preset: 0, p2preset: 1, alliance: 'blue', same: false, diff: st.difficulty, mid: st.midfield, start: null, team: st.team || '' };
-  const setupEl = mkScreen('setup', `
-    <div class="head"><h2 class="ttl">Singleplayer</h2><div class="sub">Pick a robot, an alliance and a starting spot.</div></div>
+  const setupEl = mkScreen('setup', `${topbar(CRUMB)}<h1 class="ttl">Match setup</h1>
     <div class="cols"><div class="left"></div>
-      <div class="card right"><span class="lab">Starting spot</span><div class="mapwrap"><canvas id="spot"></canvas></div>
-        <div class="pc">Drag your robot inside your SCORING ZONE (outside the LEVEL 1 area, G109). Hold <span class="kbd">J</span> / <span class="kbd">L</span> to rotate.</div></div></div>
-    <div class="bar"></div>${hint(['↑↓', 'Move'], ['←→', 'Adjust'], ['Enter', 'Select'], ['J / L', 'Rotate robot'], ['Esc', 'Back'])}`);
-  const left = setupEl.querySelector('.left'), bar = setupEl.querySelector('.bar'), cv = setupEl.querySelector('#spot');
-  const robotCard = (label, getI, setI, withTeam) => {
-    const el = h(`<div class="card row"><span class="lab">${label}</span><div class="robotc"><div class="info">${withTeam ? '<input class="team" maxlength="5" placeholder="Team #" inputmode="numeric">' : '<div class="tn hf"></div>'}<div class="nm"></div><p></p><div class="tags"></div></div><button class="btn sub">Change</button></div></div>`);
-    const paint = () => {
-      const p = ROBOT_PRESETS[getI()];
-      el.querySelector('.nm').textContent = p.name; el.querySelector('p').textContent = p.blurb;
-      el.querySelector('.tags').innerHTML = [p.drive, `${p.maxSpeed} m/s`, p.canUpper ? 'upper' : p.canLower ? 'lower' : '', p.canLaunch ? 'launcher' : '', `climb L${p.maxClimb}`].filter(Boolean).map((t) => `<span class="tag">${t}</span>`).join('');
-    };
-    const pick = () => openPicker(getI(), (i) => { setI(i); paint(); drawMap(); });
-    el.querySelector('.sub').addEventListener('click', pick);
-    const ti = el.querySelector('input'); if (ti) { ti.value = S.team; ti.addEventListener('input', () => { S.team = ti.value.replace(/\D/g, ''); ti.value = S.team; st.team = S.team; saveSettings(st); }); }
-    paint(); return { el, paint, activate: pick, adjust: (d) => { setI((getI() + d + ROBOT_PRESETS.length) % ROBOT_PRESETS.length); paint(); }, tn: el.querySelector('.tn') };
-  };
-  const rowRobot = robotCard('Your robot', () => S.preset, (i) => (S.preset = i), true);
-  const rowP2 = robotCard('Player 2 robot', () => S.p2preset, (i) => (S.p2preset = i), false);
-  const rowSame = chipsRow('Player 2 alliance', [{ v: false, t: 'Opposing' }, { v: true, t: 'Same as P1' }], () => S.same, (v) => { S.same = v; drawMap(); });
-  const resetStart = () => { S.start = { ...SIDES[S.alliance].starts[0] }; drawMap(); };
-  const rowAlli = chipsRow('Alliance', [{ v: 'blue', t: 'Blue', c: 'blue' }, { v: 'red', t: 'Red', c: 'red' }], () => S.alliance, (v) => { S.alliance = v; resetStart(); paintTeam(); });
-  const rowDiff = chipsRow('Bot difficulty', [{ v: 'easy', t: 'Easy' }, { v: 'normal', t: 'Normal' }, { v: 'hard', t: 'Hard' }], () => S.diff, (v) => { S.diff = v; st.difficulty = v; saveSettings(st); });
-  const midEl = h(`<div class="card row"><span class="lab">Midfield tubes staged (per alliance, 0-8)</span><div class="step"><button class="btn sub">−</button><b></b><button class="btn sub">+</button></div></div>`);
-  const setMid = (d) => { S.mid = Math.max(0, Math.min(8, S.mid + d)); midEl.querySelector('b').textContent = S.mid; st.midfield = S.mid; saveSettings(st); };
-  midEl.querySelectorAll('.btn').forEach((b, i) => b.addEventListener('click', () => setMid(i ? 1 : -1)));
-  const rowMid = { el: midEl, adjust: setMid, activate: () => setMid(S.mid >= 8 ? -8 : 1) };
-  const rowReset = btn('Reset spot', resetStart);
+      <div class="rightc"><div class="rh"><span>Starting spot</span><button class="rs">↺ Reset spot</button></div>
+        <div class="mapw"><canvas id="spot"></canvas></div>
+        <div class="pc">Drag to place it, hold <span class="kbd">J</span> or <span class="kbd">L</span> to turn it. Legal start: inside your SCORING ZONE, outside your LEVEL 1 area (G109).</div></div></div>
+    <div class="bar"></div>`);
+  const left = setupEl.querySelector('.left'), bar = setupEl.querySelector('.bar'), cv = setupEl.querySelector('#spot'), mapw = setupEl.querySelector('.mapw');
+  const robotCard = h(`<div class="card rcard"><div class="rinfo"><b></b><div class="nm"></div><small></small></div><button class="btn">Change</button></div>`);
+  const pvCard = h('<div class="card pvcard"></div>');
+  const lineupBox = h('<div class="card"><span class="lab">Lineup <span style="color:var(--ink-3)">· click a CPU robot to swap</span></span><div class="lineup"></div></div>');
+  const rowRobot = { el: robotCard, activate: () => show('picker') };
+  const mirrorStart = () => { const c = clampStart(S.alliance, -S.start.x, -S.start.z); S.start = { ...c, heading: (S.start.heading || 0) + Math.PI }; };
+  const defaultStart = () => ({ ...SIDES[S.alliance].starts[0] });
+  const rowAlli = seg('Alliance', [{ v: 'blue', t: '<i class="dot blue"></i>Blue', c: 'blue' }, { v: 'red', t: '<i class="dot red"></i>Red', c: 'red' }], () => S.alliance,
+    (v) => { if (v === S.alliance) return; S.alliance = st.alliance = v; saveSettings(st); mirrorStart(); refresh(true); });
+  const rowMode = seg('Mode', [{ v: 'solo', t: 'Solo <small>1v0</small>' }, { v: '1v1', t: '1v1' }, { v: '2v2', t: '2v2' }, { v: '3v3', t: '3v3' }, { v: 'local', t: 'Local 2P' }], () => S.mode,
+    (v) => { S.mode = st.mode = v; saveSettings(st); refresh(); });
+  const rowCam = seg('Camera', Object.entries(CAMNAME).map(([v, t]) => ({ v, t })), () => st.camera, (v) => { st.camera = v; save(); });
+  const rowDiff = seg('CPU difficulty', ['easy', 'normal', 'hard'].map((v) => ({ v, t: v })), () => S.diff, (v) => { S.diff = st.difficulty = v; saveSettings(st); });
+  const rowLine = { el: lineupBox, activate: () => { S.cpuA = []; S.cpuO = []; refresh(); } };
+  const rowReset = { el: setupEl.querySelector('.rs'), activate: () => { S.start = defaultStart(); drawMap(); } };
   const bBack = btn('Back', () => goBack()), bRules = btn('Rules', () => show('rules')), bSet = btn('Settings', () => show('settings')), bStart = btn('Start match', () => startMatch(), 'ac');
-  const sp = h('<span class="sp"></span>');
-  [bBack, bRules, bSet].forEach((b) => bar.appendChild(b.el)); bar.appendChild(sp); bar.appendChild(bStart.el);
-  [rowRobot, rowP2, rowSame, rowAlli, rowDiff, rowMid].forEach((r) => left.appendChild(r.el)); left.appendChild(rowReset.el);
-  const paintTeam = () => { rowRobot.el.querySelector('input').placeholder = DEFAULT_TEAMS[S.alliance][0]; };
+  [bBack].forEach((b) => bar.appendChild(b.el)); bar.appendChild(h('<span class="sp"></span>')); [bRules, bSet, bStart].forEach((b) => bar.appendChild(b.el));
+  [robotCard, pvCard, rowAlli.el, rowMode.el, rowCam.el, rowDiff.el, lineupBox].forEach((e) => left.appendChild(e));
+  let spv = null;
 
-  function openSetup(mode) {
-    S.mode = mode; const two = mode === 'local';
-    setupEl.querySelector('.ttl').textContent = two ? 'Local 2-Player' : 'Singleplayer';
-    rowP2.el.style.display = rowSame.el.style.display = two ? '' : 'none';
-    if (two && S.preset === S.p2preset) S.p2preset = (S.preset + 1) % ROBOT_PRESETS.length;
-    rowP2.paint(); S.start = null; show('setup');
+  function fillCpu() {
+    const used = new Set([myRobot().id]), c = counts(), L = roster();
+    const fix = (arr, n) => { for (let i = 0; i < n; i++) {
+      if (!arr[i] || used.has(arr[i]) || !ALL.some((r) => r.id === arr[i])) { const pool = L.filter((r) => !used.has(r.id)); arr[i] = (pool.length ? pool : L)[Math.floor(Math.random() * (pool.length || L.length))].id; }
+      used.add(arr[i]); } };
+    fix(S.cpuA, c.ally); fix(S.cpuO, c.opp);
   }
-  const setupLayer = () => {
-    const two = S.mode === 'local';
-    const items = [rowRobot, ...(two ? [rowP2, rowSame] : []), rowAlli, rowDiff, rowMid, rowReset, bBack, bRules, bSet, bStart];
-    if (!S.start) S.start = { ...SIDES[S.alliance].starts[0] };
-    paintTeam(); rowMid.el.querySelector('b').textContent = S.mid; [rowAlli, rowDiff, rowSame].forEach((r) => r.paint());
-    pushLayer({ items, i: items.length - 1, back: goBack, onKey: (e) => {
-      if (e.key === 'j' || e.key === 'J' || e.key === 'l' || e.key === 'L') { S.start.heading = (S.start.heading || 0) + (e.key.toLowerCase() === 'l' ? 0.15 : -0.15); drawMap(); return true; }
-    } });
-    requestAnimationFrame(drawMap);
+  function cycleCpu(k, d) {
+    const arr = k[0] === 'a' ? S.cpuA : S.cpuO, i = +k.slice(1), c = counts(), L = roster();
+    const used = new Set([myRobot().id, ...S.cpuA.slice(0, c.ally), ...S.cpuO.slice(0, c.opp)].filter((x) => x !== arr[i]));
+    let j = L.findIndex((r) => r.id === arr[i]);
+    for (let n = 0; n < L.length; n++) { j = (j + d + L.length) % L.length; if (!used.has(L[j].id)) break; }
+    arr[i] = L[j].id; refresh();
+  }
+  function paintLineup() {
+    const c = counts(), A = S.alliance, O = opponent(A);
+    const chip = (def, tag, k) => `<button class="lc ${k ? 'cpu' : 'you'}" ${k ? `data-k="${k}"` : ''}><i></i><span class="ln">${esc(def.number)}</span><span class="nmx">${esc(def.name)}</span>${tag ? `<em>${tag}</em>` : ''}</button>`;
+    const rows = { [A]: [chip(myRobot(), 'YOU')], [O]: [] };
+    for (let i = 0; i < c.ally; i++) rows[A].push(chip(findRobot(S.cpuA[i]), 'CPU', 'a' + i));
+    for (let i = 0; i < c.opp; i++) rows[O].push(S.mode === 'local' ? chip(findRobot(S.cpuO[i]), 'P2', 'o' + i) : chip(findRobot(S.cpuO[i]), 'CPU', 'o' + i));
+    const box = lineupBox.querySelector('.lineup');
+    box.innerHTML = ['blue', 'red'].map((a) => `<div class="lr ${a}"><b>${a}</b><div class="chs">${rows[a].join('') || '<span class="sub" style="color:var(--ink-3);font-size:12px;padding-top:4px">—</span>'}</div></div>`).join('');
+    box.querySelectorAll('.lc.cpu').forEach((b) => b.addEventListener('click', (e) => cycleCpu(b.dataset.k, e.shiftKey ? -1 : 1)));
+  }
+  function refresh(reshow = false) {
+    const r = myRobot();
+    robotCard.querySelector('b').textContent = r.number; robotCard.querySelector('.nm').textContent = r.name; robotCard.querySelector('small').textContent = r.place || r.team || '';
+    if (reshow || spv?.id !== r.id) { spv?.show(r, S.alliance); if (spv) spv.id = r.id; }
+    fillCpu(); paintLineup();
+    [rowAlli, rowMode, rowCam, rowDiff].forEach((x) => x.paint()); drawMap();
+  }
+  hooks.setup = {
+    enter() {
+      S.robotId = S.robotId && ALL.some((r) => r.id === S.robotId) ? S.robotId : roster()[0].id;
+      if (!S.start) S.start = defaultStart();
+      spv = makePreview(pvCard); spv.id = null; refresh(true);
+      const items = [rowRobot, rowAlli, rowMode, rowCam, rowDiff, rowLine, rowReset, bBack, bRules, bSet, bStart];
+      pushLayer({ items, i: items.length - 1, back: goBack, onKey: (e) => {
+        const k = e.key.toLowerCase();
+        if (k === 'j' || k === 'l') { S.start.heading = (S.start.heading || 0) + (k === 'l' ? 0.15 : -0.15); drawMap(); return true; }
+      } });
+      requestAnimationFrame(drawMap);
+    },
+    leave() { spv?.dispose(); spv = null; },
   };
-  function startMatch() {
-    const t = S.start;
-    app.onStart({ mode: S.mode, preset: ROBOT_PRESETS[S.preset], p2preset: ROBOT_PRESETS[S.p2preset], alliance: S.alliance, sameAlliance: S.same, difficulty: S.diff,
-      midfield: S.mid, start: { x: t.x, z: t.z, heading: t.heading }, team: S.team || DEFAULT_TEAMS[S.alliance][0] });
+  // CPU starts: partners take the default spots farthest from the player's spot; opponents their default spots.
+  function assignStarts() {
+    const c = counts(), A = S.alliance, O = opponent(A), d = (s) => Math.hypot(s.x - S.start.x, s.z - S.start.z);
+    return { ally: SIDES[A].starts.map((s) => ({ ...s })).sort((a, b) => d(b) - d(a)).slice(0, c.ally), opp: SIDES[O].starts.slice(0, c.opp).map((s) => ({ ...s })) };
   }
-  function openPicker(sel, done) {
-    let i = sel; const grid = h('<div class="pick"></div>');
-    const items = ROBOT_PRESETS.map((p, k) => {
-      const el = h(`<div class="card"><div class="nm hf" style="font-size:24px">${esc(p.name)}</div><p class="sub">${esc(p.blurb)}</p><div class="tags robotc"><span class="tag">${p.drive}</span><span class="tag">${p.maxSpeed} m/s</span><span class="tag">climb L${p.maxClimb}</span></div></div>`);
-      grid.appendChild(el); return { el, activate: () => { close(); done(k); } };
-    });
-    const ov = h(`<div class="ov"><div class="panel"><h2>Choose robot</h2></div></div>`); ov.firstChild.appendChild(grid);
-    ov.firstChild.appendChild(h(hint(['←→', 'Move'], ['Enter', 'Pick'], ['Esc', 'Cancel'])));
-    $ov.appendChild(ov);
-    const close = () => { ov.remove(); popLayer(); };
-    pushLayer({ items, i, horizontal: true, back: close });
+  function startMatch() {
+    fillCpu(); const c = counts();
+    app.onStart({ mode: S.mode, local: S.mode === 'local', alliance: S.alliance, player: myRobot(), difficulty: S.diff, camera: st.camera,
+      allies: S.cpuA.slice(0, c.ally).map(findRobot), opps: S.cpuO.slice(0, c.opp).map(findRobot), start: { ...S.start }, starts: assignStarts() });
   }
 
   // 2D start map
   const wx = (g, x) => g.ox + (x + FIELD.halfL) * g.s, wz = (g, z) => g.oy + (z + FIELD.halfW) * g.s;
-  const geom = () => { const w = cv.clientWidth, hh = cv.clientHeight, s = Math.min((w - 20) / FIELD.length, (hh - 20) / FIELD.width); return { w, hh, s, ox: (w - s * FIELD.length) / 2, oy: (hh - s * FIELD.width) / 2 }; };
+  const geom = () => { const w = cv.clientWidth, hh = cv.clientHeight, s = Math.min((w - 28) / FIELD.length, (hh - 28) / FIELD.width); return { w, hh, s, ox: (w - s * FIELD.length) / 2, oy: (hh - s * FIELD.width) / 2 }; };
+  let drag = false;
   function drawMap() {
     if (!S.start || !cv.clientWidth) return;
     const dpr = devicePixelRatio || 1; cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
     const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const g = geom(), R = (r, fill, stroke, dash) => { c.beginPath(); c.rect(wx(g, r.x0), wz(g, r.z0), (r.x1 - r.x0) * g.s, (r.z1 - r.z0) * g.s); if (fill) { c.fillStyle = fill; c.fill(); } if (stroke) { c.setLineDash(dash || []); c.strokeStyle = stroke; c.lineWidth = 1.5; c.stroke(); c.setLineDash([]); } };
-    R({ x0: -FIELD.halfL, x1: FIELD.halfL, z0: -FIELD.halfW, z1: FIELD.halfW }, '#181818', '#555');
-    c.font = `700 ${Math.max(9, g.s * 0.28)}px system-ui`; c.textAlign = 'center';
+    const g = geom(), R = (r, fill, stroke, w = 1) => { c.beginPath(); c.rect(wx(g, r.x0), wz(g, r.z0), (r.x1 - r.x0) * g.s, (r.z1 - r.z0) * g.s); if (fill) { c.fillStyle = fill; c.fill(); } if (stroke) { c.strokeStyle = stroke; c.lineWidth = w; c.stroke(); } };
+    R({ x0: -FIELD.halfL, x1: FIELD.halfL, z0: -FIELD.halfW, z1: FIELD.halfW }, '#0d0f13', '#ffffff30');
+    c.beginPath(); c.moveTo(wx(g, 0), wz(g, -FIELD.halfW)); c.lineTo(wx(g, 0), wz(g, FIELD.halfW)); c.strokeStyle = '#ffffff22'; c.stroke();
+    c.font = `600 ${Math.max(9, g.s * 0.2)}px system-ui`; c.textAlign = 'center';
     for (const a of ['blue', 'red']) {
-      const Sd = SIDES[a], col = a === 'blue' ? '31,91,255' : '232,32,42', mine = a === S.alliance;
-      R(Sd.scoringZone, `rgba(${col},${mine ? 0.16 : 0.07})`, `rgba(${col},.55)`, [5, 4]);
-      R(Sd.loadingZone, `rgba(${col},.08)`, `rgba(${col},.35)`, [3, 4]);
-      R(Sd.floorArea, `rgba(${col},.22)`, `rgba(${col},.8)`);
-      R(Sd.platformZone, null, `rgba(${col},.35)`, [3, 3]); R(Sd.l1Area, `rgba(${col},.12)`, `rgba(${col},.6)`);
-      Sd.platforms.forEach((p, i) => R(p, `rgba(${col},${0.25 + i * 0.15})`, `rgba(${col},.8)`));
-      R(Sd.shortWall, '#aaa'); Sd.chutes.forEach((u) => { c.fillStyle = '#ffd23f'; c.fillRect(wx(g, u.x) - 3, wz(g, u.z) - 3, 6, 6); });
-      Sd.posts.filter((p) => p.tier === 'lower').forEach((p) => { c.fillStyle = `rgb(${col})`; c.fillRect(wx(g, p.baseX) - 2, wz(g, p.z) - 3, 4, 6); });
-      Sd.stagingRow.forEach((p) => { c.beginPath(); c.arc(wx(g, p.x), wz(g, p.z), g.s * 0.12, 0, 7); c.strokeStyle = '#ffd23f88'; c.stroke(); });
-      c.fillStyle = `rgba(${col},.95)`;
-      c.fillText(`${a.toUpperCase()} SCORING`, wx(g, (Sd.scoringZone.x0 + Sd.scoringZone.x1) / 2), wz(g, Sd.scoringZone.z1) - 6);
-      c.fillText('L1 AREA', wx(g, (Sd.floorArea.x0 + Sd.floorArea.x1) / 2), wz(g, Sd.floorArea.z0) + g.s * 0.5);
-      c.fillText(`${a.toUpperCase()} LOADING`, wx(g, (Sd.loadingZone.x0 + Sd.loadingZone.x1) / 2), wz(g, Sd.loadingZone.z1) - 6);
-      c.fillText('PLATFORMS', wx(g, (Sd.platformZone.x0 + Sd.platformZone.x1) / 2), wz(g, Sd.platformZone.z1) + g.s * 0.4);
-      c.fillText(`${a.toUpperCase()} DRIVERS`, wx(g, Sd.driverStationX < 0 ? -FIELD.halfL + 1.1 : FIELD.halfL - 1.1), wz(g, 3.3));
+      const Sd = SIDES[a], col = a === 'blue' ? '61,132,250' : '241,68,69', mine = a === S.alliance, K = (o) => `rgba(${col},${o})`;
+      R(Sd.scoringZone, K(mine ? 0.13 : 0.05), K(mine ? 0.6 : 0.35)); R(Sd.loadingZone, K(0.05), K(0.3));
+      R(Sd.floorArea, K(0.12), K(0.75), 1.5); R(Sd.platformZone, null, K(0.3)); R(Sd.l1Area, K(0.1), K(0.55));
+      Sd.platforms.forEach((p, i) => R(p, K(0.15 + i * 0.12), K(0.8)));
+      R(Sd.shortWall, '#9a9a9a'); Sd.chutes.forEach((u) => { c.fillStyle = '#f0c13e'; c.fillRect(wx(g, u.x) - 2.5, wz(g, u.z) - 2.5, 5, 5); });
+      Sd.posts.filter((p) => p.tier === 'lower').forEach((p) => { c.fillStyle = K(1); c.fillRect(wx(g, p.baseX) - 2, wz(g, p.z) - 2.5, 4, 5); });
+      Sd.stagingRow.forEach((p) => { c.beginPath(); c.arc(wx(g, p.x), wz(g, p.z), g.s * 0.1, 0, 7); c.strokeStyle = '#f0c13e66'; c.stroke(); });
+      c.fillStyle = K(0.85);
+      c.fillText(mine ? 'YOUR SCORING ZONE' : 'SCORING ZONE', wx(g, (Sd.scoringZone.x0 + Sd.scoringZone.x1) / 2), wz(g, Sd.scoringZone.z1) - 6);
+      c.fillText('LEVEL 1 AREA', wx(g, (Sd.floorArea.x0 + Sd.floorArea.x1) / 2), wz(g, Sd.floorArea.z0) + g.s * 0.4);
+      c.fillText('LOADING', wx(g, (Sd.loadingZone.x0 + Sd.loadingZone.x1) / 2), wz(g, Sd.loadingZone.z1) - 6);
+      c.fillText('PLATFORMS', wx(g, (Sd.platformZone.x0 + Sd.platformZone.x1) / 2), wz(g, Sd.platformZone.z1) + g.s * 0.35);
+      c.fillText(`${a.toUpperCase()} DRIVERS`, wx(g, Sd.driverStationX < 0 ? -FIELD.halfL + 1.1 : FIELD.halfL - 1.1), wz(g, 0.1));
     }
-    const sq = (x, z, hd, fill, stroke) => {
+    const sq = (x, z, hd, fill, stroke, lw = 1.5) => {
       c.save(); c.translate(wx(g, x), wz(g, z)); c.rotate(hd); const r = ROBOT.outer * g.s / 2;
-      c.fillStyle = fill; c.strokeStyle = stroke; c.lineWidth = 2; c.fillRect(-r, -r, 2 * r, 2 * r); c.strokeRect(-r, -r, 2 * r, 2 * r);
-      c.beginPath(); c.moveTo(0, 0); c.lineTo(r * 0.9, 0); c.moveTo(r * 0.5, -r * 0.3); c.lineTo(r * 0.9, 0); c.lineTo(r * 0.5, r * 0.3); c.strokeStyle = '#fff'; c.stroke(); c.restore();
+      c.fillStyle = fill; c.strokeStyle = stroke; c.lineWidth = lw; c.fillRect(-r, -r, 2 * r, 2 * r); c.strokeRect(-r, -r, 2 * r, 2 * r);
+      c.beginPath(); c.moveTo(r * 0.95, 0); c.lineTo(r * 0.45, -r * 0.35); c.lineTo(r * 0.45, r * 0.35); c.closePath(); c.fillStyle = stroke; c.fill(); c.restore();
     };
-    const col = S.alliance === 'blue' ? '31,91,255' : '232,32,42';
-    SIDES[S.alliance].starts.forEach((p) => sq(p.x, p.z, p.heading, 'rgba(255,255,255,.04)', 'rgba(255,255,255,.2)'));
-    sq(S.start.x, S.start.z, S.start.heading || 0, `rgba(${col},.75)`, '#fff');
+    const st2 = assignStarts(), col = S.alliance === 'blue' ? '61,132,250' : '241,68,69';
+    st2.ally.forEach((p) => sq(p.x, p.z, p.heading, 'rgba(255,255,255,.04)', 'rgba(255,255,255,.25)', 1));
+    st2.opp.forEach((p) => sq(p.x, p.z, p.heading, 'rgba(255,255,255,.04)', 'rgba(255,255,255,.2)', 1));
+    sq(S.start.x, S.start.z, S.start.heading || 0, `rgba(${col},.4)`, drag ? '#f0c13e' : '#fff', 2);
   }
   const mapPos = (e) => { const g = geom(), r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left - g.ox) / g.s - FIELD.halfL, z: (e.clientY - r.top - g.oy) / g.s - FIELD.halfW }; };
-  let drag = false;
   const moveTo = (e) => { const p = mapPos(e), q = clampStart(S.alliance, p.x, p.z); S.start.x = q.x; S.start.z = q.z; drawMap(); };
-  cv.addEventListener('pointerdown', (e) => { drag = true; cv.setPointerCapture(e.pointerId); moveTo(e); });
+  cv.addEventListener('pointerdown', (e) => { drag = true; mapw.classList.add('drag'); cv.setPointerCapture(e.pointerId); moveTo(e); });
   cv.addEventListener('pointermove', (e) => drag && moveTo(e));
-  cv.addEventListener('pointerup', () => (drag = false));
-  addEventListener('resize', () => cur === 'setup' && drawMap());
+  const endDrag = () => { drag = false; mapw.classList.remove('drag'); drawMap(); };
+  cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
+  new ResizeObserver(() => cur === 'setup' && drawMap()).observe(mapw);
+
+  // ---------- choose your robot ----------
+  const pickerEl = mkScreen('picker', `${topbar(CRUMB)}<h1 class="ptitle">Choose your robot</h1>
+    <div class="pk"><div class="pkl"><div class="pkh"><span class="rost">Roster<em></em></span><label class="search"><input placeholder="Search number, team or place   ( / )"></label></div><div class="pkgrid"></div></div>
+      <aside class="pkr"><div class="card rb"><div class="top2"><span>Robot</span><span class="al"><i class="dot"></i><span></span></span></div><div class="rn2"><b class="hf"></b><div><strong></strong><small></small></div></div></div>
+        <div class="card spec"><div class="st">Spec</div><div class="sbody"></div></div></aside></div><div class="bar"></div>`);
+  const pkGrid = pickerEl.querySelector('.pkgrid'), pkSearch = pickerEl.querySelector('.search input'), pkBar = pickerEl.querySelector('.bar');
+  const pBack = btn('Back', () => goBack()), pDrive = btn('Drive', () => choose(), 'ac');
+  pkBar.appendChild(pBack.el); pkBar.appendChild(h('<span class="sp"></span>')); pkBar.appendChild(pDrive.el);
+  let pkLayer = null, pkSel = null, pkPrev = [], pkIO = null;
+  const choose = () => { if (!pkSel) return; S.robotId = st.robotId = pkSel; saveSettings(st); goBack(); };
+  function pkSelect(def) {
+    pkSel = def.id; const red = S.alliance === 'red';
+    pkGrid.querySelectorAll('.rc').forEach((e) => { e.classList.toggle('sel', e.dataset.id === def.id); e.classList.toggle('red', red); });
+    const rb = pickerEl.querySelector('.rb'); rb.querySelector('.al').className = 'al ' + S.alliance; rb.querySelector('.al span').textContent = S.alliance + ' alliance';
+    rb.querySelector('.al .dot').className = 'dot ' + S.alliance;
+    rb.querySelector('b').textContent = def.number; rb.querySelector('strong').textContent = def.name; rb.querySelector('small').textContent = def.place || def.team || '';
+    pickerEl.querySelector('.sbody').innerHTML = specHTML(def);
+    pDrive.el.textContent = `Drive ${def.number}`;
+  }
+  function pkBuild() {
+    const q = pkSearch.value.trim().toLowerCase();
+    const list = ALL.filter((r) => !q || `${r.number} ${r.name} ${r.team || ''} ${r.place || ''}`.toLowerCase().includes(q));
+    pkPrev.forEach((p) => p.dispose()); pkPrev = []; pkIO?.disconnect(); pkGrid.innerHTML = '';
+    pickerEl.querySelector('.rost em').textContent = list.length;
+    const impEl = h('<div class="rc imp"><span>+</span>Import STL</div>'); pkGrid.appendChild(impEl);
+    const items = [{ el: impEl, activate: () => runImport(async (d) => { pkSel = d.id; pkSearch.value = ''; pkBuild(); }) }];
+    pkIO = new IntersectionObserver((es) => es.forEach((e) => { const p = e.target._pv; if (!p) return; if (e.isIntersecting && !p.on) { p.on = true; p.show(e.target._def, S.alliance); } }), { root: pkGrid, rootMargin: '200px' });
+    list.forEach((def) => {
+      const del = def.source === 'stl' ? '<button class="del" title="Delete robot">×</button>' : '';
+      const el = h(`<div class="rc" data-id="${esc(def.id)}"><div class="pvh"></div><div class="rcf"><b>${esc(def.number)}</b><div><strong>${esc(def.name)}</strong><small>${esc(def.place || def.team || '')}</small></div></div>${del}</div>`);
+      const pv = makePreview(el.querySelector('.pvh')); el._pv = pv; el._def = def; pkPrev.push(pv); pkGrid.appendChild(el); pkIO.observe(el);
+      el.querySelector('.del')?.addEventListener('click', async (e) => { e.stopPropagation();
+        if (!confirm(`Delete imported robot ${def.number} ${def.name}?`)) return;
+        try { await RBM.deleteRobot(def.id); } catch (er) { console.warn(er); }
+        await refreshRobots(); if (S.robotId === def.id) S.robotId = st.robotId = roster()[0].id; if (pkSel === def.id) pkSel = S.robotId; pkBuild(); });
+      el.addEventListener('dblclick', () => choose());
+      items.push({ el, def, onFocus: () => pkSelect(def), onClick: () => {}, activate: () => choose() });
+    });
+    items.push(pBack, pDrive);
+    const si = Math.max(1, items.findIndex((x) => x.def?.id === pkSel));
+    if (!items.some((x) => x.def?.id === pkSel) && items[1]?.def) pkSelect(items[1].def);
+    if (pkLayer) setItems(pkLayer, items, si);
+    return items;
+  }
+  pkSearch.addEventListener('input', () => { pkBuild(); });
+  hooks.picker = {
+    enter() {
+      pkSel = S.robotId; pkSearch.value = '';
+      pkLayer = pushLayer({ items: [{ el: h('<i></i>') }], back: goBack, noHover: true, onKey: (e) => {
+        const L = pkLayer, n = L.items.length - 2, i = L.i, k = e.key;
+        if (k === '/') { pkSearch.focus(); return true; }
+        const cols = getComputedStyle(pkGrid).gridTemplateColumns.split(' ').length;
+        if (i < n) {
+          if (k === 'ArrowRight') focus(L, Math.min(i + 1, n - 1)); else if (k === 'ArrowLeft') focus(L, Math.max(i - 1, 0));
+          else if (k === 'ArrowDown') focus(L, i + cols < n ? i + cols : n); else if (k === 'ArrowUp') focus(L, i - cols >= 0 ? i - cols : i); else return false;
+          return true;
+        }
+        if (k === 'ArrowLeft' || k === 'ArrowRight') { focus(L, i === n ? n + 1 : n); return true; }
+        if (k === 'ArrowUp') { focus(L, Math.max(1, L.items.findIndex((x) => x.def?.id === pkSel))); return true; }
+        return k === 'ArrowDown';
+      } });
+      pkBuild();
+    },
+    leave() { pkPrev.forEach((p) => p.dispose()); pkPrev = []; pkIO?.disconnect(); pkLayer = null; },
+  };
 
   // ---------- rules ----------
   const P = POINTS, T = TIMING;
-  const rulesEl = mkScreen('rules', `<div class="head"><h2>Rules</h2><div class="sub">TOTALLY TUBULAR — condensed from the game manual (Draft 0.10)</div></div><div class="page">
-  <p>Two alliances of three robots score identical tubes on the floor and on two tiers of eight posts, then finish on elevated platforms. ${TUBE.perAlliance} tubes per alliance: staged midfield tubes (0-8), one preload per robot, the rest are fed by your human player from the loading station.</p>
+  const rulesEl = mkScreen('rules', `${topbar(CRUMB)}<h1 class="ptitle">Rules</h1><div class="page">
+  <p>Two alliances score identical tubes on the floor and on two tiers of eight posts, then finish on elevated platforms. ${TUBE.perAlliance} tubes per alliance: staged midfield tubes, one preload per robot, the rest fed by your human player from the loading station. Condensed from the game manual (Draft 0.10).</p>
   <h3>Match phases</h3><table><tr><th>Phase</th><th class="n">Time</th><th>Notes</th></tr>
   <tr><td>AUTO</td><td class="n">${T.auto}s</td><td>No human-player tubes, no entering either LOADING ZONE, tubes score double. No contact with opponents once fully past center.</td></tr>
   <tr><td>TELEOP</td><td class="n">${T.teleop}s</td><td>Loading permitted. The last ${T.endgame}s are ENDGAME.</td></tr>
@@ -235,66 +437,115 @@ export function createUI(app) {
   <li><b>G111</b> After a foul you have 3s to stop or get 6 ft (1.83 m) clear, or it repeats.</li></ul></div>
   <h3>Robot limits</h3><p>Robot perimeter 120 in, extension 20 in beyond the frame (30 in in ENDGAME near the platforms), 2-tube carry limit, one extension direction at a time.</p>
   </div>${hint(['↑↓', 'Scroll'], ['Esc', 'Back'])}`);
-  const page = (el) => el.querySelector('.page');
-  const rulesLayer = () => pushLayer({ items: [{ el: h('<i></i>') }], back: goBack, onKey: (e) => { const d = { ArrowDown: 60, ArrowUp: -60, PageDown: 400, PageUp: -400 }[e.key]; if (d) { page(rulesEl).scrollBy(0, d); return true; } } });
+  hooks.rules = { enter: () => pushLayer({ items: [{ el: h('<i></i>') }], back: goBack, onKey: (e) => {
+    const d = { ArrowDown: 60, ArrowUp: -60, PageDown: 400, PageUp: -400 }[e.key]; if (d) { rulesEl.querySelector('.page').scrollBy(0, d); return true; } } }) };
 
-  // ---------- settings / controls ----------
-  const keyRows = (rows) => `<table><tr><th>Action</th><th>Player 1</th><th>Player 2 (local)</th><th>Gamepad</th></tr>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</table>`;
-  const setEl = mkScreen('settings', `<div class="head"><h2>Controls / Settings</h2></div><div class="page"><div class="opts"></div>
-  <h3>Controls</h3>${keyRows([
-    ['Drive (swerve)', 'W A S D (up = away from your driver station)', '↑ ← ↓ →', 'Left stick'],
-    ['Drive (tank)', 'W / S throttle, A / D turn', '↑ / ↓, ← / →', 'Left stick'],
-    ['Rotate', 'Q / E or ← / →', ', / .', 'Right stick X'],
-    ['Intake (hold)', 'Space or Shift', '/', 'RT'], ['Score lower post', '1 or U', 'K', 'A'], ['Score upper post', '2 or I', 'L', 'Y'],
-    ['Drop on floor', '3 or F', ';', 'B'], ['Launch', 'R', "'", 'X'], ['Climb (hold, ENDGAME)', 'G', 'P', 'LB'],
-    ['Request human-player tube', 'H', 'O', 'RB'], ['Camera / Pause', 'C / Esc', 'C / Esc', '- / Start']])}
-  <p class="sub">In chase camera mode, movement is relative to the robot. Menus: ↑↓ move, ←→ adjust, Enter select, Esc back.</p></div>${hint(['↑↓', 'Move'], ['←→', 'Change'], ['Esc', 'Back'])}`);
-  const optRows = [
-    chipsRow('Graphics quality', [{ v: 'low', t: 'Low' }, { v: 'high', t: 'High' }], () => st.quality, (v) => { st.quality = v; save(); }),
-    chipsRow('Default camera', [{ v: 'driver', t: 'Driver' }, { v: 'chase', t: 'Chase' }, { v: 'top', t: 'Top' }], () => st.camera, (v) => { st.camera = v; save(); }),
-    chipsRow('Field-relative driving', [{ v: true, t: 'On' }, { v: false, t: 'Off' }], () => st.fieldRelative, (v) => { st.fieldRelative = v; save(); }),
-    chipsRow('Human player auto-feed', [{ v: true, t: 'On' }, { v: false, t: 'Off (press H)' }], () => st.autoHP, (v) => { st.autoHP = v; save(); }),
-  ];
-  const sBack = btn('Back', () => goBack());
-  optRows.forEach((r) => { r.el.style.marginBottom = '8px'; setEl.querySelector('.opts').appendChild(r.el); }); setEl.querySelector('.opts').appendChild(sBack.el);
-  const settingsLayer = () => { optRows.forEach((r) => r.paint()); pushLayer({ items: [...optRows, sBack], back: goBack }); };
+  // ---------- settings ----------
+  const setEl = mkScreen('settings', `${topbar(CRUMB)}<h1 class="ptitle">Settings</h1><div class="swh" style="width:min(600px,100%);margin:0 auto;padding:0 12px"><div class="tabs"></div></div><div class="sw"></div><div class="bar"></div>`);
+  const TABS = ['general', 'display', 'keyboard', 'controller'];
+  let tab = 'general', sLayer = null;
+  const tabsEl = setEl.querySelector('.tabs'), swEl = setEl.querySelector('.sw');
+  tabsEl.innerHTML = TABS.map((t) => `<button data-t="${t}">${t}</button>`).join('');
+  tabsEl.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.t)));
+  const sBack = btn('Back', () => goBack()), sReset = btn('Reset controls', () => { st.keys = {}; st.speeds = [...DEFAULTS.speeds]; save(); setTab(tab); });
+  const sbar = setEl.querySelector('.bar'); sbar.appendChild(sBack.el); sbar.appendChild(h('<span class="sp"></span>')); sbar.appendChild(sReset.el);
+  const tabsItem = { el: tabsEl, adjust: (d) => setTab(TABS[(TABS.indexOf(tab) + d + TABS.length) % TABS.length], true), activate: () => {} };
+  const clampv = (v, a, b) => Math.max(a, Math.min(b, v));
+  const rowSlider = (label, min, max, step, get, set, fmt = (v) => v + '%') => {
+    const el = h(`<div class="srow"><span>${label}</span><div class="ctl"><input type="range" min="${min}" max="${max}" step="${step}"><span class="pct"></span></div></div>`);
+    const inp = el.querySelector('input'), pct = el.querySelector('.pct'), paint = () => { inp.value = get(); pct.textContent = fmt(get()); };
+    inp.addEventListener('input', () => { set(+inp.value); paint(); }); paint();
+    return { el, adjust: (d) => { set(clampv(get() + d * step, min, max)); paint(); } };
+  };
+  const rowTog = (label, opts, get, set) => {
+    const el = h(`<div class="srow"><span>${label}</span><div class="ctl"><div class="tg">${opts.map((o, i) => `<b data-i="${i}">${o.t}</b>`).join('')}</div></div></div>`);
+    const paint = () => el.querySelectorAll('b').forEach((b, i) => b.classList.toggle('on', opts[i].v === get()));
+    const step = (d) => { const i = opts.findIndex((o) => o.v === get()); set(opts[(i + d + opts.length) % opts.length].v); paint(); };
+    el.querySelectorAll('b').forEach((b, i) => b.addEventListener('click', () => { set(opts[i].v); paint(); })); paint();
+    return { el, adjust: step, activate: () => step(1) };
+  };
+  const OO = [{ v: false, t: 'Off' }, { v: true, t: 'On' }];
+  const group = (title, rows) => { const w = h(`<div><div class="sec">${title}</div><div class="srows"></div></div>`); rows.forEach((r) => w.querySelector('.srows').appendChild(r.el)); return w; };
+  function keyRow(id, label) {
+    const el = h(`<div class="srow"><span>${label}</span><div class="ctl"></div></div>`), ctl = el.querySelector('.ctl');
+    const list = () => (st.keys[id] || DEFAULT_KEYS[id] || []);
+    const paint = () => {
+      ctl.innerHTML = list().map((c, i) => `<button class="kc" data-i="${i}">${keyLabel(c)}</button>`).join('') + (list().length < 3 ? '<button class="kc add" data-i="+">+</button>' : '');
+      ctl.querySelectorAll('.kc').forEach((b) => b.addEventListener('click', () => cap(b)));
+    };
+    function cap(b) {
+      b.classList.add('cap'); b.textContent = 'press a key';
+      capturing = { done: (code) => { capturing = null; const a = [...list()], i = b.dataset.i === '+' ? a.length : +b.dataset.i;
+        if (code === '') a.splice(i, 1); else if (code) a[i] = code;
+        st.keys = { ...st.keys, [id]: a.filter(Boolean) }; save(); paint(); } };
+    }
+    paint(); return { el, activate: () => cap(ctl.querySelector('.kc')) };
+  }
+  function setTab(t, keepFocus) {
+    tab = t; tabsEl.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.t === t)); swEl.innerHTML = '';
+    let rows = [], nodes = [];
+    if (t === 'general') {
+      const nm = h(`<div class="srow"><span>Name</span><div class="ctl"><input class="fld" maxlength="24" placeholder="Driver"></div></div>`), ni = nm.querySelector('input');
+      ni.value = st.driverName; ni.addEventListener('input', () => { st.driverName = ni.value; saveSettings(st); });
+      const r1 = { el: nm, activate: () => ni.focus() };
+      const vol = rowSlider('Volume', 0, 100, 5, () => st.volume, (v) => { st.volume = v; save(); });
+      const sp = [0, 1, 2].map((i) => rowSlider(`Speed ${i + 1} (key ${i + 1})`, 10, 100, 5, () => st.speeds[i], (v) => { st.speeds[i] = v; save(); }));
+      const mid = rowSlider('Midfield tubes per alliance', 0, 8, 1, () => st.midfield, (v) => { st.midfield = v; save(); }, (v) => v);
+      const hp = rowTog('Human player auto-feed', OO, () => st.autoHP, (v) => { st.autoHP = v; save(); });
+      rows = [r1, vol, ...sp, mid, hp];
+      nodes = [group('Driver', [r1]), group('Sound', [vol]), group('Controls', sp), group('Match', [mid, hp])];
+    } else if (t === 'display') {
+      const q = rowTog('Graphics', [{ v: 'low', t: 'Low' }, { v: 'high', t: 'High' }], () => st.quality, (v) => { st.quality = v; save(); });
+      const bg = rowTog('Background (stands + crowd)', OO, () => st.background, (v) => { st.background = v; save(); });
+      const cm = rowTog('Default camera', Object.entries(CAMNAME).map(([v, t2]) => ({ v, t: t2 })), () => st.camera, (v) => { st.camera = v; save(); });
+      const fl = rowTog('Camera follow', [{ v: 'smooth', t: 'Smooth' }, { v: 'tight', t: 'Tight' }, { v: 'locked', t: 'Locked' }], () => st.cameraFollow, (v) => { st.cameraFollow = v; save(); });
+      const fr = rowTog('Field-relative drive', OO, () => st.fieldRelative, (v) => { st.fieldRelative = v; save(); });
+      const hg = rowTog('Hide GUI (keep scoreboard)', OO, () => st.hideGui, (v) => { st.hideGui = v; save(); });
+      rows = [q, bg, cm, fl, fr, hg]; nodes = [group('Graphics', [q, bg]), group('Camera', [cm, fl, fr]), group('Interface', [hg])];
+    } else if (t === 'keyboard') {
+      nodes = [h('<div class="note">Click a key to change it (Backspace clears, Esc cancels). Changes save automatically.</div>')];
+      for (const grp of ['Driving', 'Scoring', 'Match']) { const rs = ACTIONS.filter((a) => a[2] === grp).map((a) => keyRow(a[0], a[1])); rows.push(...rs); nodes.push(group(grp, rs)); }
+    } else {
+      const pads = [...(navigator.getGamepads?.() || [])].filter(Boolean);
+      const info = (a, b) => ({ el: h(`<div class="srow"><span>${a}</span><span class="ctl" style="flex:none;color:var(--ink-2)">${b}</span></div>`) });
+      const map = [['Drive / strafe', 'Left stick'], ['Turn', 'Right stick X'], ['Intake (hold)', 'RT'], ['Score (auto tier)', 'A'], ['Drop / outtake', 'B'], ['Launch', 'X'], ['Toggle tier', 'Y'], ['Climb (hold)', 'LB'], ['Human player tube', 'RB'], ['Pause', 'Start']].map(([a, b]) => info(a, b));
+      nodes = [h(`<div class="note">${pads.length ? 'Controller detected: ' + esc(pads[0].id) : 'No controller detected. Connect one and press any button.'}</div>`), group('Gamepad (standard layout)', map)];
+    }
+    nodes.forEach((n) => swEl.appendChild(n));
+    if (sLayer) setItems(sLayer, [tabsItem, ...rows, sBack, sReset], keepFocus ? 0 : sLayer.i);
+  }
+  hooks.settings = { enter() { sLayer = pushLayer({ items: [tabsItem], back: goBack }); setTab(tab); }, leave() { sLayer = null; } };
 
   // ---------- HUD ----------
-  $hud.innerHTML = `<div class="sbw"><div class="sb"><div class="sbox red" id="rs">0</div><div class="sclk"><div class="t" id="clk">2:05</div><div class="ph" id="ph">READY</div></div><div class="sbox blue" id="bs">0</div></div>
-    <div class="chips2"><div id="rc"></div><div id="bc"></div></div></div>
+  $hud.innerHTML = `<div class="sbw"><div class="sb"><div class="sbox red" id="rs">0</div><div class="sclk"><div class="t" id="clk">2:05</div><div class="ph" id="ph">READY</div></div><div class="sbox blue" id="bs">0</div></div></div>
     <div class="bl"><div class="tubes"><div class="tube"></div><div class="tube"></div></div><div class="pn" id="pn"></div><div class="pl" id="pl"></div><div class="prog"><i id="pg"></i></div></div>
-    <div class="br"><div class="hf" id="cam" style="font-size:16px;color:var(--ac)"></div><div class="hints" id="hints"></div></div>`;
+    <div class="br"><div class="hst" id="hst"></div><div class="hints" id="hints"></div></div>`;
   const $ = (id) => $hud.querySelector('#' + id);
-  const chips = (sc, a) => {
-    if (!sc) return '';
-    const pp = sc.platform?.points ?? 0, fp = sc.fullPosts ?? 0;
-    return `<span class="c2 ${fp >= 8 ? 'lit' : ''}">POSTS ${fp}/16</span><span class="c2 ${pp >= 16 ? 'lit' : ''}">PLAT ${pp}</span>`;
-  };
   const PHL = { pre: 'READY', auto: 'AUTO', teleop: 'TELEOP', endgame: 'ENDGAME', post: 'ASSESSING', done: 'FINAL' };
-  function setHints(preset) {
-    const k = (a, b) => `<span><span class="kbd">${a}</span>${b}</span>`;
-    $('hints').innerHTML = [preset.drive === 'tank' ? k('W/S', 'drive') + k('A/D', 'turn') : k('WASD', 'move') + k('Q/E', 'rotate'), k('Space', 'intake'), k('1', 'lower'), preset.canUpper ? k('2', 'upper') : '', k('3', 'drop'),
-      preset.canLaunch ? k('R', 'launch') : '', k('G', 'climb'), k('H', 'tube'), k('C', 'camera'), k('Esc', 'pause')].join('');
-    $('pn').textContent = preset.name;
+  const k1 = (id) => keyLabel((st.keys[id] || DEFAULT_KEYS[id])[0] || '');
+  function setHints(def) {
+    const p = def.preset, k = (a, b) => `<span><span class="kbd">${a}</span>${b}</span>`;
+    $('hints').innerHTML = [k('WASD', 'move'), k(`${k1('rotL')}/${k1('rotR')}`, 'turn'), k(k1('intake'), 'intake'), k(k1('score'), 'score'), k(k1('tier'), 'tier'), k(k1('drop'), 'drop'),
+      p.canLaunch ? k(k1('launch'), 'launch') : '', k(k1('climb'), 'climb'), k(k1('tube'), 'tube'), k(k1('camera'), 'camera'), k(k1('slot'), 'slot'), k('1-3', 'speed'), k('Esc', 'pause')].join('');
+    $('pn').textContent = `${def.number} ${def.name}`;
   }
+  let lastHud = {};
   function updateHUD(d) {
-    const { match, score, me, camera } = d;
+    const { match, score, me, camera, tier, cap } = lastHud = d;
     const rem = Math.max(0, Math.ceil(match?.remaining ?? 0));
     $('clk').textContent = `${Math.floor(rem / 60)}:${pad2(rem % 60)}`;
     const ph = $('ph'); ph.textContent = PHL[match?.phase] || ''; ph.classList.toggle('endgame', match?.phase === 'endgame');
     $('rs').textContent = score?.red?.total ?? 0; $('bs').textContent = score?.blue?.total ?? 0;
-    $('rc').innerHTML = chips(score?.red); $('bc').innerHTML = chips(score?.blue);
-    const held = me?.held?.length ?? 0;
-    $hud.querySelectorAll('.tube').forEach((t, i) => t.classList.toggle('on', i < held));
+    $hud.querySelectorAll('.tube').forEach((t, i) => t.classList.toggle('on', i < (me?.held?.length ?? 0)));
     const a = me?.action; $('pg').style.width = a && a.duration ? `${Math.min(100, (100 * a.t) / a.duration)}%` : '0%'; $('pl').textContent = a ? a.type.toUpperCase() : '';
-    $('cam').textContent = `CAMERA: ${camera.toUpperCase()}`;
+    $('hst').textContent = `${(CAMNAME[camera] || camera).toUpperCase()}  ·  TIER ${(tier || 'auto').toUpperCase()}  ·  SPEED ${Math.round((cap ?? 1) * 100)}%`;
   }
 
   // ---------- toasts / countdown ----------
   function toast(text, o = {}) {
     const el = h(`<div class="toast ${o.alliance || ''} ${o.foul ? 'foul' : ''}">${o.tag ? `<b>${esc(o.tag)}</b>` : ''}${esc(text)}</div>`);
-    $toasts.appendChild(el); while ($toasts.children.length > 6) $toasts.firstChild.remove();
-    setTimeout(() => el.classList.add('out'), o.ms || 3800); setTimeout(() => el.remove(), (o.ms || 3800) + 450);
+    $toasts.appendChild(el); while ($toasts.children.length > 5) $toasts.firstChild.remove();
+    setTimeout(() => el.classList.add('out'), o.ms || 3600); setTimeout(() => el.remove(), (o.ms || 3600) + 450);
   }
   let lastCd = null;
   function countdown(v) {
@@ -303,29 +554,30 @@ export function createUI(app) {
   }
 
   // ---------- pause / results ----------
-  function showPause() {
-    const camEl = h('<div class="mi">Camera: <span class="cv" style="margin-left:8px;color:inherit"></span></div>');
-    const paint = () => (camEl.querySelector('.cv').textContent = app.getCamera().toUpperCase());
+  let closePause = () => {};
+  function showPause(info = {}) {
+    pauseInfo = info;
+    const hd = lastHud, A = info.alliance || 'blue', sc = hd.score, you = sc?.[A]?.total ?? 0, them = sc?.[opponent(A)]?.total ?? 0;
+    const rem = Math.max(0, Math.ceil(hd.match?.remaining ?? 0));
     const mk = (t, fn) => ({ el: h(`<div class="mi">${t}</div>`), activate: fn });
-    const items = [mk('Resume', () => resume()), mk('Restart', () => { close(); app.onRestart(); }), { el: camEl, activate: () => { app.onCamera(1); paint(); }, adjust: (d) => { app.onCamera(d); paint(); } }, mk('Quit to menu', () => { close(); app.onQuit(); })];
-    const panel = h('<div class="ov"><div class="panel"><h2>Paused</h2></div></div>'); items.forEach((i) => panel.firstChild.appendChild(i.el));
-    panel.firstChild.appendChild(h(hint(['↑↓', 'Move'], ['Enter', 'Select'], ['Esc', 'Resume'])));
-    $ov.appendChild(panel); paint();
-    const close = () => { panel.remove(); if (top()?.pause) popLayer(); };
+    const items = [mk('Resume', () => resume()), mk('Restart', () => { close(); app.onRestart(); }),
+      mk('Settings', () => { fromPause = true; show('settings'); }), mk('Back to setup', () => { close(); app.onQuit('setup'); }), mk('Title screen', () => { close(); app.onQuit('title'); })];
+    const ov = h(`<div class="ov"><div class="pz"><h2>Paused</h2><div class="who"><i class="dot ${A}"></i>${A[0].toUpperCase() + A.slice(1)} alliance · ${esc(info.label || '')}</div>
+      <div class="mt"><div class="y">You<b>${you}</b></div><div>${PHL[hd.match?.phase] || ''}<b>${Math.floor(rem / 60)}:${pad2(rem % 60)}</b></div><div class="t">Them<b>${them}</b></div></div><div class="pm"></div></div></div>`);
+    items.forEach((i) => ov.querySelector('.pm').appendChild(i.el)); $ov.appendChild(ov);
+    const close = () => { ov.remove(); if (top()?.pause) popLayer(); };
     const resume = () => { close(); app.onResume(); };
-    pushLayer({ items, pause: true, back: resume });
-    hidePause = close;
+    pushLayer({ items, pause: true, back: resume }); closePause = close;
   }
-  let hidePause = () => {};
+
   function showResults(f, fouls = []) {
     const B = f.blue || {}, R = f.red || {}, g = (o, ...p) => p.reduce((a, k) => a?.[k], o) ?? 0;
     const tp = (n, per) => `${n} <span class="sub">(${n * per})</span>`;
     const rows = [['AUTO floor', 'auto', 'floor', P.floor.auto], ['AUTO lower', 'auto', 'lower', P.lower.auto], ['AUTO upper', 'auto', 'upper', P.upper.auto],
       ['TELEOP floor', 'teleop', 'floor', P.floor.teleop], ['TELEOP lower', 'teleop', 'lower', P.lower.teleop], ['TELEOP upper', 'teleop', 'upper', P.upper.teleop]]
       .map(([l, ph, k, per]) => `<tr><td>${l}</td><td class="n b">${tp(g(B, ph, k), per)}</td><td class="n r">${tp(g(R, ph, k), per)}</td></tr>`).join('');
-    const lv = (o) => (o?.platform?.levels || []).map((l) => (l ? `L${l}` : '—')).join(' ') || '-';
     const w = g(B, 'total') > g(R, 'total') ? 'blue' : g(R, 'total') > g(B, 'total') ? 'red' : 'tie';
-    const ov = h(`<div class="ov"><div class="panel res"><div class="win ${w}">${w === 'tie' ? 'TIE MATCH' : w.toUpperCase() + ' ALLIANCE WINS'}</div>
+    const ov = h(`<div class="ov"><div class="res"><div class="win ${w}">${w === 'tie' ? 'Tie match' : w + ' alliance wins'}</div>
       <table><tr><th>Category</th><th class="n b">Blue</th><th class="n r">Red</th></tr>${rows}
       <tr><td>Platform points</td><td class="n b">${g(B, 'platform', 'points')}</td><td class="n r">${g(R, 'platform', 'points')}</td></tr>
       <tr><td>Fouls received (foul / tech)</td><td class="n b">${g(B, 'fouls', 'points')} <span class="sub">(${g(B, 'fouls', 'foul')} / ${g(B, 'fouls', 'tech')})</span></td><td class="n r">${g(R, 'fouls', 'points')} <span class="sub">(${g(R, 'fouls', 'foul')} / ${g(R, 'fouls', 'tech')})</span></td></tr>
@@ -334,15 +586,18 @@ export function createUI(app) {
       <tr><td>Ranking points (win ${g(B, 'rp', 'win')}/${g(R, 'rp', 'win')}, posts ${g(B, 'rp', 'posts8') + g(B, 'rp', 'posts12')}/${g(R, 'rp', 'posts8') + g(R, 'rp', 'posts12')}, platform ${g(B, 'rp', 'platform16')}/${g(R, 'rp', 'platform16')})</td><td class="n b">${g(B, 'rp', 'total')} RP</td><td class="n r">${g(R, 'rp', 'total')} RP</td></tr></table>
       ${fouls.length ? `<p class="sub" style="margin:10px 0 0">Penalties: ${fouls.slice(0, 12).map((x) => `${esc(x.rule)} ${esc(x.type)} vs ${esc(x.against)}`).join(' · ')}</p>` : ''}
       <div class="acts"></div></div></div>`);
-    const items = [btn('Play Again', () => { ov.remove(); popLayer(); app.onRestart(); }, 'ac'), btn('Menu', () => { ov.remove(); popLayer(); app.onQuit(); })];
+    const done = (fn) => () => { ov.remove(); popLayer(); fn(); };
+    const items = [btn('Play again', done(() => app.onRestart()), 'ac'), btn('Back to setup', done(() => app.onQuit('setup'))), btn('Title screen', done(() => app.onQuit('title')))];
     items.forEach((i) => ov.querySelector('.acts').appendChild(i.el)); $ov.appendChild(ov);
     pushLayer({ items, horizontal: true, back: () => items[1].activate() });
   }
 
   return {
-    show, showHome: () => { hist.length = 0; show('home'); }, showHUD: (on, preset) => { $hud.hidden = !on; if (on && preset) setHints(preset); if (!on) { $toasts.innerHTML = ''; countdown(null); } },
-    updateHUD, toast, countdown, showPause, hidePause: () => hidePause(), showResults,
+    show, showPick: () => show('pick'), showHome: () => { hist.length = 0; show('home'); }, showSetup: () => show('setup'),
+    showHUD: (on, def) => { $hud.hidden = !on; document.body.classList.toggle('nogui', !!st.hideGui); if (on && def) setHints(def); if (!on) { $toasts.innerHTML = ''; countdown(null); } },
+    updateHUD, toast, countdown, showPause, hidePause: () => closePause(), showResults,
     menuOpen: () => stack.length > 0,
-    error: (msg) => { const e = h(`<div class="err">${esc(msg)}</div>`); homeEl.insertBefore(e, homeEl.querySelector('.foot')); },
+    error: (msg) => { const e = h(`<div class="err">${esc(msg)}</div>`); (screens.pick || document.body).appendChild(e); },
+    refreshRobots,
   };
 }

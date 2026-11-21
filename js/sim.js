@@ -5,7 +5,7 @@ const TAU = Math.PI * 2;
 const G = 9.81;
 const TR = TUBE.tubeRadius;
 const TIP_SPACING = 0.14; // tubes are 5 in thick, so stack along the 24 in peg at 0.14 m
-const MAX_SUB = 1 / 60;
+const MAX_SUB = 1 / 120;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrap = (a) => a - TAU * Math.floor((a + Math.PI) / TAU);
 const num = (v) => (Number.isFinite(v) ? clamp(v, -1, 1) : 0);
@@ -18,8 +18,19 @@ const TUNE = {
   launchAngle: (20 * Math.PI) / 180, launchMin: 1.5, launchMax: 5, throwDist: 4,
   intakeNear: 0.3, intakeFar: 1.1, intakeHalf: 0.55, intakeHalfWide: 0.8,
   feedCooldown: 1.5, manualCooldown: 0.8, chuteSpeed: 2.4, chuteTime: 0.6, feedClear: 1.0,
-  robotRest: 0.1, tubeRest: 0.3, wallRest: 0.4, grip: 10,
   releaseAt: 0.7, climbTouch: 0.2, climbAngle: (60 * Math.PI) / 180,
+};
+
+// Physics constants (SI). Robots: mass/yaw inertia, traction circle, DC-motor curve; tubes: light + bouncy.
+const PHYS = {
+  mass: 61, radius: ROBOT.radius, inertiaK: 0.55,   // yaw inertia = inertiaK * m * R^2
+  mu: 1.05, latMu: 1.6,                             // carpet traction (accel <= mu*g); tank lateral friction
+  response: 0.08, kv: 12, kw: 20,                   // module response (s); velocity / yaw-rate loop gains (1/s)
+  alpha: 4, tankAlpha: 3.5, moduleR: 0.8,           // yaw accel per rad/s of turnRate; wheel radius from center (x R)
+  crr: 0.02,                                        // rolling resistance coefficient
+  robotRest: 0.15, robotMu: 0.35, wallRest: 0.15, wallMu: 0.3, restV: 0.4, slop: 0.003,
+  tubeRest: 0.4, tubeWallRest: 0.4, tubeRobotRest: 0.3, tubeVisc: 1.4, tubeCrr: 0.5, tubeSpinDecay: 3,
+  drag: 0.09, floorBounce: 0.35,                    // tube quadratic air drag (1/m), floor bounce in flight
 };
 
 // circle vs rect -> [nx, nz, penetration] pointing out of the rect, or null
@@ -38,6 +49,8 @@ function circleRect(x, z, r, q) {
 export function createSim(options = {}) {
   const events = [];
   const emit = (e) => events.push(e);
+  let seed = (options.seed ?? 1) >>> 0;
+  const rnd = () => { seed = (seed + 0x6d2b79f5) >>> 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   const midfield = { blue: options.midfield?.blue ?? 8, red: options.midfield?.red ?? 8 };
   const autoHP = options.autoHumanPlayer !== false;
 
@@ -52,13 +65,14 @@ export function createSim(options = {}) {
   });
   const platforms = ALLIANCES.flatMap((a) => SIDES[a].platforms.map((p) => ({ ...p, alliance: a, id: `${a}-L${p.level}` })));
   const platRects = platforms;
+  const obstacles = [...walls, ...postRails, ...platRects];
 
   const tubes = [];
   const tubeById = new Map();
   let tubeSeq = 0;
   function newTube(origin, x, z, state = 'floor') {
     const t = { id: `t${tubeSeq++}`, origin, x, y: TR, z, vx: 0, vy: 0, vz: 0, state, holder: null, post: null,
-      stackIndex: -1, placedInAuto: false, lockT: 0, chuteT: 0, moving: false, flight: null };
+      stackIndex: -1, placedInAuto: false, yaw: 0, spin: 0, lockT: 0, chuteT: 0, moving: false, flight: null };
     tubes.push(t); tubeById.set(t.id, t);
     return t;
   }
@@ -69,13 +83,16 @@ export function createSim(options = {}) {
   const rt = new Map(); // per-robot internal
   const preloads = { blue: 0, red: 0 };
   for (const o of options.robots ?? []) {
-    const preset = ROBOT_PRESETS.find((p) => p.id === (o.preset?.id ?? o.preset)) ?? ROBOT_PRESETS[0];
-    const st = o.start ?? SIDES[o.alliance].starts[o.slot ?? 0];
-    const r = { id: o.id, alliance: o.alliance, slot: o.slot ?? 0, number: o.number ?? '', preset,
+    const op = typeof o.preset === 'object' && o.preset ? o.preset : null;
+    const base = ROBOT_PRESETS.find((p) => p.id === (op ? op.id : o.preset)) ?? ROBOT_PRESETS[0];
+    const preset = { ...base, ...op, radius: op?.radius > 0 ? op.radius : PHYS.radius, mass: op?.mass > 0 ? op.mass : PHYS.mass };
+    const mass = preset.mass, radius = preset.radius;
+    const st = o.start ?? SIDES[o.alliance].starts[o.slot ?? 0] ?? SIDES[o.alliance].starts[0];
+    const r = { id: o.id, alliance: o.alliance, slot: o.slot ?? 0, number: o.number ?? '', preset, radius, mass, inertia: PHYS.inertiaK * mass * radius * radius,
       x: st.x, z: st.z, y: 0, heading: st.heading ?? 0, vx: 0, vz: 0, omega: 0, held: [], action: null,
       arm: 0, armTier: 'stow', support: 0, intakeOn: false, contacts: [] };
     robots.push(r); robotById.set(r.id, r);
-    rt.set(r.id, { platform: null, intakeT: 0, intakeTarget: null, touching: new Set(), prevClimb: false, act: null });
+    rt.set(r.id, { cx: 0, cz: 0, cr: 0, cth: 0, ctu: 0, platform: null, intakeT: 0, intakeTarget: null, touching: new Set(), prevClimb: false, act: null });
     if (o.preload !== false) {
       const t = newTube(r.alliance, r.x, r.z, 'held');
       t.holder = r.id; r.held.push(t.id); preloads[r.alliance]++;
@@ -133,8 +150,8 @@ export function createSim(options = {}) {
       if (Math.abs(wrap(r.heading - wallAng)) > TUNE.placeAngle) continue;
       const dx = p.tipX - r.x, dz = p.z - r.z;
       const f = dx * c + dz * s, l = -dx * s + dz * c;
-      if (f <= 0 || f - ROBOT.radius > TUNE.reach || Math.abs(l) > TUNE.placeLateral) continue;
-      const sc = Math.abs(f - ROBOT.radius) + 2 * Math.abs(l);
+      if (f <= 0 || f - r.radius > TUNE.reach || Math.abs(l) > TUNE.placeLateral) continue;
+      const sc = Math.abs(f - r.radius) + 2 * Math.abs(l);
       if (sc < bs) { bs = sc; best = p; }
     }
     return best;
@@ -184,7 +201,7 @@ export function createSim(options = {}) {
   function doLaunch(r) {
     const t = tubeById.get(r.held[0]);
     const c = Math.cos(r.heading), s = Math.sin(r.heading);
-    const x0 = r.x + c * (ROBOT.radius + 0.1), z0 = r.z + s * (ROBOT.radius + 0.1), y0 = r.y + 0.9;
+    const x0 = r.x + c * (r.radius + 0.1), z0 = r.z + s * (r.radius + 0.1), y0 = r.y + 0.9;
     release(t);
     Object.assign(t, { state: 'flight', x: x0, y: y0, z: z0, placedInAuto: false, post: null });
     const p = r.action.target ? postById.get(r.action.target) : null;
@@ -197,9 +214,11 @@ export function createSim(options = {}) {
       tz = clamp(z0 + s * TUNE.throwDist, -FIELD.halfW + TUBE.outerRadius, FIELD.halfW - TUBE.outerRadius);
       ty = TR; T = 0.9;
     }
+    const D = Math.hypot(tx - x0, tz - z0), k0 = PHYS.drag;
     const vy = (ty - y0 + 0.5 * G * T * T) / T;
     t.flight = { t: 0, T, x0, y0, z0, tx, ty, tz, vy, post: p ? p.id : null };
-    t.vx = (tx - x0) / T; t.vz = (tz - z0) / T; t.vy = vy;
+    const vk = p || D < 1e-6 ? 1 : (Math.exp(k0 * D) - 1) / (k0 * D); // free throws: start faster to offset air drag
+    t.vx = ((tx - x0) / T) * vk; t.vz = ((tz - z0) / T) * vk; t.vy = vy; t.spin = (rnd() - 0.5) * 6;
     emit({ type: 'launch', robotId: r.id, tubeId: t.id, postId: p ? p.id : undefined });
   }
 
@@ -211,7 +230,7 @@ export function createSim(options = {}) {
       if (q.alliance !== r.alliance || q.level !== need) continue;
       const px = clamp(r.x, q.x0, q.x1), pz = clamp(r.z, q.z0, q.z1);
       const dx = px - r.x, dz = pz - r.z, d = Math.hypot(dx, dz);
-      if (d > ROBOT.radius + TUNE.climbTouch) continue;
+      if (d > r.radius + TUNE.climbTouch) continue;
       if (d > 1e-6 && Math.abs(wrap(Math.atan2(dz, dx) - r.heading)) > TUNE.climbAngle) continue;
       return q;
     }
@@ -221,7 +240,7 @@ export function createSim(options = {}) {
   function startClimb(r, k) {
     const q = findClimbTarget(r, k);
     if (!q) return;
-    const R = ROBOT.radius;
+    const R = r.radius;
     const tx = clamp(r.x, q.x0 + R, q.x1 - R), tz = clamp(r.z, q.z0 + R, q.z1 - R);
     const open = q.z1 < 0 ? q.z1 : q.z0; // open edge faces field center
     const cz = q.z1 < 0 ? Math.min(tz, open - R) : Math.max(tz, open + R);
@@ -232,30 +251,49 @@ export function createSim(options = {}) {
   }
 
   // ---------- robot update ----------
-  function driveRobot(r, inp, dt, scale) {
-    const p = r.preset, sp = p.maxSpeed * scale;
+  // Swerve: independent translation + yaw sharing one traction budget; tank: forward drive + skid-steer yaw, strong lateral friction.
+  // Braking (error opposing velocity) is limited only by traction, so a stopped robot holds ground until shoved harder than mu*m*g.
+  // Command -> module response lag -> motor-curve accel limit -> traction-circle scaling -> velocity.
+  function driveRobot(r, k, inp, dt, scale) {
+    const p = r.preset, sp = p.maxSpeed * scale, tank = p.drive === 'tank', m = r.mass, g = G;
     let mx = inp.moveX, mz = inp.moveZ, th = inp.throttle, tu = inp.turn, rot = inp.rotate;
-    const maxd = p.accel * dt;
-    if (p.drive === 'tank') {
+    if (tank) {
       if (!th && !tu && (mx || mz)) {
         const err = wrap(Math.atan2(mz, mx) - r.heading);
         tu = clamp(err * 3, -1, 1); th = Math.min(1, Math.hypot(mx, mz)) * Math.max(0, Math.cos(err));
       }
-      const c = Math.cos(r.heading), s = Math.sin(r.heading);
-      let vf = r.vx * c + r.vz * s, vl = -r.vx * s + r.vz * c;
-      vf = approach(vf, th * sp, maxd);
-      vl *= Math.exp(-TUNE.grip * dt);
-      r.vx = vf * c - vl * s; r.vz = vf * s + vl * c;
       rot = tu;
+    } else { const n = Math.hypot(mx, mz); if (n > 1) { mx /= n; mz /= n; } }
+    const a = 1 - Math.exp(-dt / PHYS.response);
+    k.cx += (mx - k.cx) * a; k.cz += (mz - k.cz) * a; k.cth += (th - k.cth) * a; k.cr += (rot - k.cr) * a;
+    const aTrac = (p.grip ?? PHYS.mu) * g;
+    let at = 0, ux = 0, uz = 0, ew = 0, al = 0;
+    const c = Math.cos(r.heading), s = Math.sin(r.heading);
+    if (tank) {
+      const vf = r.vx * c + r.vz * s, e = k.cth * sp - vf;
+      ux = c * Math.sign(e); uz = s * Math.sign(e);
+      at = Math.min(Math.abs(e) * (e * vf < 0 ? 1 / dt : PHYS.kv), p.accel * clamp(1 - (vf * Math.sign(e)) / p.maxSpeed, 0.08, 2));
     } else {
-      const m = Math.hypot(mx, mz);
-      if (m > 1) { mx /= m; mz /= m; }
-      let dx = mx * sp - r.vx, dz = mz * sp - r.vz;
-      const d = Math.hypot(dx, dz);
-      if (d > maxd) { dx *= maxd / d; dz *= maxd / d; }
-      r.vx += dx; r.vz += dz;
+      const ex = k.cx * sp - r.vx, ez = k.cz * sp - r.vz, en = Math.hypot(ex, ez);
+      if (en > 1e-9) {
+        ux = ex / en; uz = ez / en;
+        at = Math.min(en * (ex * r.vx + ez * r.vz < 0 ? 1 / dt : PHYS.kv), p.accel * clamp(1 - (r.vx * ux + r.vz * uz) / p.maxSpeed, 0.08, 2));
+      }
     }
-    r.omega = approach(r.omega, rot * p.turnRate * scale, p.turnRate * 10 * dt);
+    const wMax = p.turnRate * scale, wT = k.cr * wMax;
+    ew = wT - r.omega;
+    const a0 = p.turnRate * (tank ? PHYS.tankAlpha : PHYS.alpha), sw = Math.sign(ew);
+    al = Math.min(Math.abs(ew) * (ew * r.omega < 0 ? 1 / dt : PHYS.kw), a0 * clamp(1 - (r.omega * sw) / p.turnRate, 0.08, 2));
+    // traction circle: translation + yaw force demand share mu*m*g
+    const use = at / aTrac + (r.inertia * al) / (PHYS.moduleR * r.radius * m * aTrac);
+    if (use > 1) { at /= use; al /= use; }
+    r.vx += ux * at * dt; r.vz += uz * at * dt; r.omega += sw * al * dt;
+    if (tank) { // skid-steer: lateral velocity is killed by friction, only a hard shove makes it slide
+      const vl = -r.vx * s + r.vz * c, d = Math.min(Math.abs(vl), PHYS.latMu * g * dt) * Math.sign(vl);
+      r.vx += s * d; r.vz -= c * d;
+    }
+    const v = Math.hypot(r.vx, r.vz), rr = PHYS.crr * g * dt;
+    if (v > 0) { const f = v <= rr ? 0 : 1 - rr / v; r.vx *= f; r.vz *= f; }
   }
 
   function updateIntake(r, k, on, dt) {
@@ -268,12 +306,12 @@ export function createSim(options = {}) {
       k.intakeT = 0; k.intakeTarget = null; return;
     }
     const c = Math.cos(r.heading), s = Math.sin(r.heading);
-    const half = r.preset.id === 'sweeper' ? TUNE.intakeHalfWide : TUNE.intakeHalf;
+    const half = r.preset.id === 'sweeper' ? TUNE.intakeHalfWide : TUNE.intakeHalf, dr = r.radius - ROBOT.radius;
     let best = null, bd = 1e9;
     for (const t of tubes) {
       if ((t.state !== 'floor' && t.state !== 'chute') || t.lockT > 0) continue;
       const dx = t.x - r.x, dz = t.z - r.z, f = dx * c + dz * s, l = -dx * s + dz * c;
-      if (f < TUNE.intakeNear || f > TUNE.intakeFar || Math.abs(l) > half) continue;
+      if (f < TUNE.intakeNear + dr || f > TUNE.intakeFar + dr || Math.abs(l) > half) continue;
       const d = f + Math.abs(l);
       if (d < bd) { bd = d; best = t; }
     }
@@ -282,7 +320,7 @@ export function createSim(options = {}) {
     k.intakeT += dt;
     r.action = { type: 'intake', t: k.intakeT, duration: r.preset.intakeTime, target: best.id };
     r.armTier = 'floor';
-    const px = r.x + c * 0.55, pz = r.z + s * 0.55, a = Math.min(1, 12 * dt);
+    const px = r.x + c * (0.55 + dr), pz = r.z + s * (0.55 + dr), a = Math.min(1, 12 * dt);
     best.x += (px - best.x) * a; best.z += (pz - best.z) * a;
     best.vx = r.vx; best.vz = r.vz;
     if (k.intakeT >= r.preset.intakeTime) {
@@ -317,7 +355,7 @@ export function createSim(options = {}) {
       else if (a.target === 'floor') {
         const t = tubeById.get(r.held[0]), c = Math.cos(r.heading), s = Math.sin(r.heading);
         release(t);
-        dropToFloor(t, r.x + c * (ROBOT.radius + 0.4), r.z + s * (ROBOT.radius + 0.4), c * 1.2 + r.vx, s * 1.2 + r.vz);
+        dropToFloor(t, r.x + c * (r.radius + 0.4), r.z + s * (r.radius + 0.4), c * 1.2 + r.vx, s * 1.2 + r.vz);
         t.lockT = 0.7; t.placedInAuto = false;
         emit({ type: 'place', robotId: r.id, tubeId: t.id, text: 'floor' });
       } else {
@@ -337,9 +375,23 @@ export function createSim(options = {}) {
     r.x += r.vx * dt; r.z += r.vz * dt;
   }
 
+  // Static obstacle contact (n points from obstacle to robot): restitution on normal, Coulomb friction impulse -> spin.
+  function wallHit(r, nx, nz, pen) {
+    r.x += nx * pen; r.z += nz * pen;
+    const R = r.radius, ax = -nx * R, az = -nz * R;                     // contact arm from center
+    const vcx = r.vx - r.omega * az, vcz = r.vz + r.omega * ax;
+    const vn = vcx * nx + vcz * nz;
+    if (vn >= 0) return;
+    const jn = -(1 + (vn < -PHYS.restV ? PHYS.wallRest : 0)) * vn * r.mass;
+    r.vx += (nx * jn) / r.mass; r.vz += (nz * jn) / r.mass;
+    const tx = -nz, tz = nx, vt = (r.vx - r.omega * az) * tx + (r.vz + r.omega * ax) * tz;
+    const kt = 1 / r.mass + (R * R) / r.inertia;
+    const jt = clamp(-vt / kt, -PHYS.wallMu * jn, PHYS.wallMu * jn);
+    r.vx += (tx * jt) / r.mass; r.vz += (tz * jt) / r.mass; r.omega += (ax * tz - az * tx) * jt / r.inertia;
+  }
+
   function collideRobotWorld(r, k) {
-    const R = ROBOT.radius;
-    const bump = (n) => { const vn = r.vx * n[0] + r.vz * n[1]; if (vn < 0) { r.vx -= vn * n[0]; r.vz -= vn * n[1]; } };
+    const R = r.radius;
     if (k.platform) {
       const q = k.platform, open = q.z1 < 0;
       const out = open ? r.z > q.z1 - 0.15 : r.z < q.z0 + 0.15;
@@ -351,39 +403,48 @@ export function createSim(options = {}) {
       }
     }
     if (!k.platform && r.action?.type !== 'climb') {
-      for (const q of [...walls, ...postRails]) { const n = circleRect(r.x, r.z, R, q); if (n) { r.x += n[0] * n[2]; r.z += n[1] * n[2]; bump(n); } }
-      for (const q of platRects) { const n = circleRect(r.x, r.z, R, q); if (n) { r.x += n[0] * n[2]; r.z += n[1] * n[2]; bump(n); } }
+      for (const q of obstacles) { const n = circleRect(r.x, r.z, R, q); if (n) wallHit(r, n[0], n[1], n[2]); }
     }
     const mx = FIELD.halfL - R, mz = FIELD.halfW - R;
-    if (r.x < -mx) { r.x = -mx; if (r.vx < 0) r.vx = 0; } else if (r.x > mx) { r.x = mx; if (r.vx > 0) r.vx = 0; }
-    if (r.z < -mz) { r.z = -mz; if (r.vz < 0) r.vz = 0; } else if (r.z > mz) { r.z = mz; if (r.vz > 0) r.vz = 0; }
+    if (r.x < -mx) wallHit(r, 1, 0, -mx - r.x); else if (r.x > mx) wallHit(r, -1, 0, r.x - mx);
+    if (r.z < -mz) wallHit(r, 0, 1, -mz - r.z); else if (r.z > mz) wallHit(r, 0, -1, r.z - mz);
   }
 
-  function collideRobots() {
-    const R2 = 2 * ROBOT.radius;
-    for (const r of robots) r.contacts = [];
+  function collideRobots(first) {
+    if (first) for (const r of robots) r.contacts = [];
     for (let i = 0; i < robots.length; i++) {
       for (let j = i + 1; j < robots.length; j++) {
         const a = robots[i], b = robots[j];
         if (Math.abs(a.y - b.y) > 0.35) continue;
+        const ra = a.radius, rb = b.radius, R2 = ra + rb;
         let dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
-        const ka = rt.get(a.id), kb = rt.get(b.id);
-        const key = b.id;
-        if (d < R2 + 0.03) {
-          a.contacts.push(b.id); b.contacts.push(a.id);
-          if (!ka.touching.has(key)) { ka.touching.add(key); emit({ type: 'contact', robotId: a.id, text: b.id }); }
-        } else ka.touching.delete(key);
+        const ka = rt.get(a.id), key = b.id;
+        if (first) {
+          if (d < R2 + 0.03) {
+            a.contacts.push(b.id); b.contacts.push(a.id);
+            if (!ka.touching.has(key)) { ka.touching.add(key); emit({ type: 'contact', robotId: a.id, text: b.id }); }
+          } else ka.touching.delete(key);
+        }
         if (d >= R2) continue;
         if (d < 1e-6) { dx = 1; dz = 0; d = 1; }
-        const nx = dx / d, nz = dz / d, pen = (R2 - d) / 2;
+        const nx = dx / d, nz = dz / d;
         const aFix = a.action?.type === 'climb', bFix = b.action?.type === 'climb';
-        const wa = aFix ? 0 : bFix ? 1 : 0.5, wb = bFix ? 0 : aFix ? 1 : 0.5;
-        a.x -= nx * pen * 2 * wa; a.z -= nz * pen * 2 * wa; b.x += nx * pen * 2 * wb; b.z += nz * pen * 2 * wb;
-        const vn = (b.vx - a.vx) * nx + (b.vz - a.vz) * nz;
-        if (vn < 0) {
-          const j2 = -(1 + TUNE.robotRest) * vn;
-          a.vx -= nx * j2 * wa; a.vz -= nz * j2 * wa; b.vx += nx * j2 * wb; b.vz += nz * j2 * wb;
-        }
+        const ia = aFix ? 0 : 1 / a.mass, ib = bFix ? 0 : 1 / b.mass, iia = aFix ? 0 : 1 / a.inertia, iib = bFix ? 0 : 1 / b.inertia;
+        if (ia + ib === 0) continue;
+        const cor = (Math.max(R2 - d - PHYS.slop, 0) * 0.9) / (ia + ib);
+        a.x -= nx * cor * ia; a.z -= nz * cor * ia; b.x += nx * cor * ib; b.z += nz * cor * ib;
+        const aax = nx * ra, aaz = nz * ra, bax = -nx * rb, baz = -nz * rb; // contact arms (a->p, b->p)
+        let rvx = b.vx - b.omega * baz - (a.vx - a.omega * aaz), rvz = b.vz + b.omega * bax - (a.vz + a.omega * aax);
+        const vn = rvx * nx + rvz * nz;
+        if (vn >= 0) continue;
+        const jn = (-(1 + (vn < -PHYS.restV ? PHYS.robotRest : 0)) * vn) / (ia + ib);
+        a.vx -= nx * jn * ia; a.vz -= nz * jn * ia; b.vx += nx * jn * ib; b.vz += nz * jn * ib;
+        rvx = b.vx - b.omega * baz - (a.vx - a.omega * aaz); rvz = b.vz + b.omega * bax - (a.vz + a.omega * aax);
+        const tx = -nz, tz = nx, vt = rvx * tx + rvz * tz;
+        const kt = ia + ib + ra * ra * iia + rb * rb * iib;
+        const jt = clamp(-vt / kt, -PHYS.robotMu * jn, PHYS.robotMu * jn);
+        a.vx -= tx * jt * ia; a.vz -= tz * jt * ia; b.vx += tx * jt * ib; b.vz += tz * jt * ib;
+        a.omega -= (aax * tz - aaz * tx) * jt * iia; b.omega += (bax * tz - baz * tx) * jt * iib;
       }
     }
   }
@@ -400,32 +461,36 @@ export function createSim(options = {}) {
       if (!n) return;
       t.x += n[0] * n[2]; t.z += n[1] * n[2];
       const vn = t.vx * n[0] + t.vz * n[1];
-      if (vn < 0) { t.vx -= (1 + TUNE.wallRest) * vn * n[0]; t.vz -= (1 + TUNE.wallRest) * vn * n[1]; }
+      if (vn < 0) { t.vx -= (1 + PHYS.tubeWallRest) * vn * n[0]; t.vz -= (1 + PHYS.tubeWallRest) * vn * n[1]; }
     };
     for (const q of walls) bounce(q);
     for (const q of platRects) bounce(q);
     // Field boundary last: platforms sit flush with the side wall, so a bounce can push past it.
-    if (t.x < -mx) { t.x = -mx; if (t.vx < 0) t.vx = -t.vx * TUNE.wallRest; } else if (t.x > mx) { t.x = mx; if (t.vx > 0) t.vx = -t.vx * TUNE.wallRest; }
-    if (t.z < -mz) { t.z = -mz; if (t.vz < 0) t.vz = -t.vz * TUNE.wallRest; } else if (t.z > mz) { t.z = mz; if (t.vz > 0) t.vz = -t.vz * TUNE.wallRest; }
+    if (t.x < -mx) { t.x = -mx; if (t.vx < 0) t.vx = -t.vx * PHYS.tubeWallRest; } else if (t.x > mx) { t.x = mx; if (t.vx > 0) t.vx = -t.vx * PHYS.tubeWallRest; }
+    if (t.z < -mz) { t.z = -mz; if (t.vz < 0) t.vz = -t.vz * PHYS.tubeWallRest; } else if (t.z > mz) { t.z = mz; if (t.vz > 0) t.vz = -t.vz * PHYS.tubeWallRest; }
   }
 
   function tubeRobot(t) {
-    const rr = ROBOT.radius + TUBE.outerRadius;
     for (const r of robots) {
       if (r.y > 0.1) continue;
-      const k = rt.get(r.id);
+      const k = rt.get(r.id), rr = r.radius + TUBE.outerRadius;
       const dx = t.x - r.x, dz = t.z - r.z, d2 = dx * dx + dz * dz;
       if (d2 >= rr * rr) continue;
       if (k.zone && t.lockT <= 0) {
         const c = Math.cos(r.heading), s = Math.sin(r.heading), f = dx * c + dz * s, l = -dx * s + dz * c;
-        if (f > TUNE.intakeNear && Math.abs(l) < (r.preset.id === 'sweeper' ? TUNE.intakeHalfWide : TUNE.intakeHalf)) continue;
+        if (f > TUNE.intakeNear + r.radius - ROBOT.radius && Math.abs(l) < (r.preset.id === 'sweeper' ? TUNE.intakeHalfWide : TUNE.intakeHalf)) continue;
       }
       let d = Math.sqrt(d2), nx, nz;
       if (d < 1e-6) { nx = 1; nz = 0; d = 0; } else { nx = dx / d; nz = dz / d; }
       const pen = rr - d;
       t.x += nx * pen; t.z += nz * pen;
-      const vn = (t.vx - r.vx) * nx + (t.vz - r.vz) * nz;
-      if (vn < 0) { t.vx -= (1 + 0.2) * vn * nx; t.vz -= (1 + 0.2) * vn * nz; }
+      const ax = nx * r.radius, az = nz * r.radius;                   // robot surface velocity incl. spin
+      const rvx = t.vx - (r.vx - r.omega * az), rvz = t.vz - (r.vz + r.omega * ax), vn = rvx * nx + rvz * nz;
+      if (vn < 0) {
+        const dv = -(1 + (vn < -PHYS.restV ? PHYS.tubeRobotRest : 0)) * vn, mr = TUBE.mass / r.mass;
+        t.vx += dv * nx; t.vz += dv * nz; r.vx -= dv * nx * mr; r.vz -= dv * nz * mr;
+        t.spin += (rvx * -nz + rvz * nx) * 2;
+      }
       tubeWalls(t);
       // pinned against a wall: slide sideways around the robot
       const ex = t.x - r.x, ez = t.z - r.z, ed = Math.hypot(ex, ez);
@@ -438,7 +503,7 @@ export function createSim(options = {}) {
   }
 
   function updateTubes(dt) {
-    const fric = Math.exp(-TUBE.friction * dt);
+    const fric = Math.exp(-PHYS.tubeVisc * dt), crr = PHYS.tubeCrr * dt, sdec = Math.exp(-PHYS.tubeSpinDecay * dt);
     const act = [];
     for (const t of tubes) {
       if (t.lockT > 0) t.lockT -= dt;
@@ -463,19 +528,28 @@ export function createSim(options = {}) {
             }
           }
         } else {
-          t.vy -= G * dt; t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
-          t.x = clamp(t.x, -FIELD.halfL + TUBE.outerRadius, FIELD.halfL - TUBE.outerRadius);
-          t.z = clamp(t.z, -FIELD.halfW + TUBE.outerRadius, FIELD.halfW - TUBE.outerRadius);
+          const dk = Math.exp(-PHYS.drag * Math.hypot(t.vx, t.vy, t.vz) * dt); // quadratic air drag
+          t.vx *= dk; t.vz *= dk; t.vy = t.vy * dk - G * dt;
+          t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
+          t.yaw += t.spin * dt;
+          const fx = FIELD.halfL - TUBE.outerRadius, fz = FIELD.halfW - TUBE.outerRadius;
+          if (Math.abs(t.x) > fx) { t.x = clamp(t.x, -fx, fx); t.vx *= -PHYS.tubeWallRest; }
+          if (Math.abs(t.z) > fz) { t.z = clamp(t.z, -fz, fz); t.vz *= -PHYS.tubeWallRest; }
           if (t.y <= TR && t.vy < 0) {
-            dropToFloor(t, t.x, t.z, t.vx * 0.4, t.vz * 0.4);
-            emit({ type: 'land', tubeId: t.id });
+            if (!f.landed) { f.landed = true; emit({ type: 'land', tubeId: t.id }); }
+            if (t.vy < -1.2) { t.y = TR; t.vy *= -PHYS.floorBounce; t.vx *= 0.55; t.vz *= 0.55; t.spin += (rnd() - 0.5) * 4; }
+            else dropToFloor(t, t.x, t.z, t.vx * 0.45, t.vz * 0.45);
           }
         }
         t.moving = true;
       } else if (t.state === 'floor' || t.state === 'chute') {
         t.x += t.vx * dt; t.z += t.vz * dt; t.y = TR;
         if (t.state === 'chute') { t.chuteT -= dt; if (t.chuteT <= 0) t.state = 'floor'; }
-        else { t.vx *= fric; t.vz *= fric; }
+        else {
+          const sp = Math.hypot(t.vx, t.vz);
+          if (sp > 0) { const f = sp <= crr ? 0 : fric * (1 - crr / sp); t.vx *= f; t.vz *= f; }
+        }
+        t.yaw += t.spin * dt; t.spin *= sdec;
         act.push(t);
       }
     }
@@ -503,8 +577,8 @@ export function createSim(options = {}) {
             a.x -= nx * pen; a.z -= nz * pen; o.x += nx * pen; o.z += nz * pen;
             const vn = (o.vx - a.vx) * nx + (o.vz - a.vz) * nz;
             if (vn < 0) {
-              const j2 = -(1 + TUNE.tubeRest) * vn / 2;
-              a.vx -= nx * j2; a.vz -= nz * j2; o.vx += nx * j2; o.vz += nz * j2;
+              const j2 = -(1 + (vn < -PHYS.restV ? PHYS.tubeRest : 0)) * vn / 2, vt = (o.vx - a.vx) * -nz + (o.vz - a.vz) * nx;
+              a.vx -= nx * j2; a.vz -= nz * j2; o.vx += nx * j2; o.vz += nz * j2; a.spin -= vt; o.spin += vt;
             }
           }
         }
@@ -535,7 +609,7 @@ export function createSim(options = {}) {
   function feed(h, cd) {
     const p = chuteSpawn(h);
     const t = newTube(h.alliance, p.x, p.z, 'chute');
-    t.vx = h.c.dirX * TUNE.chuteSpeed; t.vz = h.c.dirZ * TUNE.chuteSpeed; t.chuteT = TUNE.chuteTime;
+    t.vx = h.c.dirX * TUNE.chuteSpeed; t.vz = h.c.dirZ * TUNE.chuteSpeed; t.chuteT = TUNE.chuteTime; t.spin = (rnd() - 0.5) * 3;
     reserve[h.alliance]--; h.cd = cd;
     emit({ type: 'feed', tubeId: t.id, text: `${h.alliance} chute ${h.index}` });
     return true;
@@ -569,7 +643,7 @@ export function createSim(options = {}) {
       const a = r.action?.type;
       const scale = a === 'place' ? 0.35 : a === 'launch' ? 0.5 : 1;
       if (r.action?.type === 'climb') { r.vx = r.vz = r.omega = 0; }
-      else driveRobot(r, inp, dt, scale);
+      else driveRobot(r, k, inp, dt, scale);
       updateIntake(r, k, !disabled && !!raw.intake, dt);
       if (r.action?.type !== 'climb') moveRobot(r, k, dt);
       progressAction(r, k, dt);
@@ -578,7 +652,7 @@ export function createSim(options = {}) {
       if (r.arm <= 0 && !r.action) r.armTier = 'stow';
       else if (r.action?.type === 'intake') r.armTier = 'floor';
     }
-    collideRobots();
+    collideRobots(true); collideRobots(false);
     for (const r of robots) {
       const k = rt.get(r.id);
       collideRobotWorld(r, k);
@@ -612,5 +686,5 @@ export function createSim(options = {}) {
 
   function drainEvents() { return events.splice(0, events.length); }
 
-  return { state, step, drainEvents, requestHumanTube, robotById: (id) => robotById.get(id), tubeById: (id) => tubeById.get(id), tune: TUNE };
+  return { state, step, drainEvents, requestHumanTube, robotById: (id) => robotById.get(id), tubeById: (id) => tubeById.get(id), tune: TUNE, phys: PHYS };
 }

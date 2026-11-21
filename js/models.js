@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { TUBE, ROBOT, SIDES } from './config.js';
+import { getMeshSync } from './robots.js';
 
 // ---------- tubes ----------
 let TA;
@@ -75,9 +76,62 @@ const cyl = (r, len, mat, x, y, z, axis = 'z') => {
 
 const TIER_H = { stow: 0.45, floor: 0.2, lower: 0.95, upper: 1.75 };
 
+function makeMarker() {
+  const marker = new THREE.Group(); marker.visible = false;
+  const mmat = new THREE.MeshBasicMaterial({ color: 0xffe14d, transparent: true, opacity: 0.9, depthTest: false });
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.035, 8, 32), mmat); ring.rotation.x = Math.PI / 2;
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.3, 4), mmat); cone.rotation.x = Math.PI; cone.position.y = 0.3;
+  marker.add(ring, cone); marker.renderOrder = 10;
+  return marker;
+}
+
+const accentMat = (hex) => M('acc' + hex, () => std(hex, { roughness: 0.5 }));
+const cadMat = () => M('cad', () => std(0xcfd3da, { metalness: 0.35, roughness: 0.5 }));
+
+// Imported STL: CAD-grey mesh + generated alliance bumpers around its footprint.
+function createMeshModel(robot, geo) {
+  const model = robot.preset.model, ud = geo.userData || {};
+  const fp = ud.footprint || model.footprint || { x: 0.76, z: 0.76 };
+  const root = new THREE.Group(), body = new THREE.Group();
+  root.add(body);
+  const m = new THREE.Mesh(geo, cadMat());
+  m.castShadow = m.receiveShadow = true;
+  body.add(m);
+  const b = 0.08, bh = 0.2, by = 0.19, bm = bumperMat(robot.alliance, robot.number);
+  const ox = fp.x / 2 + b / 2, oz = fp.z / 2 + b / 2;
+  for (const sx of [-1, 1]) {
+    body.add(bx(b, bh, fp.z + 2 * b, bm, sx * ox, by, 0));
+    body.add(bx(fp.x, bh, b, bm, 0, by, sx * oz));
+  }
+  const carry = new THREE.Object3D(); carry.position.set(fp.x / 2 + b + 0.1, 0.45, 0);
+  body.add(carry);
+  const marker = makeMarker(); root.add(marker);
+  const top = (ud.height || model.height || 0.8) + 0.6;
+  let hCur = TIER_H.stow, eCur = 0, t = 0;
+  function update(rs, dt = 0.016, isPlayer = rs.isPlayer) {
+    t += dt;
+    root.position.set(rs.x, rs.y || 0, rs.z);
+    root.rotation.y = -rs.heading;
+    const k = 1 - Math.exp(-dt * 10), tier = rs.armTier || 'stow';
+    hCur += ((TIER_H[tier] ?? TIER_H.stow) - hCur) * k;
+    eCur += ((tier === 'stow' || tier === 'floor' ? 0 : rs.arm) * ROBOT.maxExtension - eCur) * k;
+    carry.position.set(fp.x / 2 + b + 0.1 + eCur, Math.max(0.3, hCur), 0);
+    marker.visible = !!isPlayer;
+    if (isPlayer) { marker.position.y = top + Math.sin(t * 3) * 0.08; marker.rotation.y = t * 1.5; }
+  }
+  update({ ...robot, x: 0, z: 0, heading: 0, armTier: 'stow', arm: 0 }, 1);
+  return { object: root, update, carry, root };
+}
+
 export function createRobotModel(robot) {
   const preset = robot.preset || {};
-  const id = preset.id || 'stacker';
+  const pm = preset.model || {};
+  if (pm.kind === 'mesh') {
+    const geo = getMeshSync(pm.meshId);
+    if (geo) return createMeshModel(robot, geo);
+  }
+  const id = (pm.kind === 'procedural' && pm.style) || preset.id || 'stacker';
+  const acc = pm.accent !== undefined ? accentMat(pm.accent) : orange();
   const root = new THREE.Group();
   const body = new THREE.Group();   // slight pitch/roll room
   root.add(body);
@@ -97,7 +151,7 @@ export function createRobotModel(robot) {
   // intake roller
   const roller = new THREE.Group(); roller.position.set(h - 0.02, 0.13, 0);
   const rw = id === 'sweeper' ? 0.92 : 0.6;
-  roller.add(cyl(0.05, rw, orange(), 0, 0, 0));
+  roller.add(cyl(0.05, rw, acc, 0, 0, 0));
   roller.add(bx(0.06, 0.012, rw, blk(), 0.03, 0, 0));
   body.add(roller);
   if (id === 'sweeper') {
@@ -106,18 +160,18 @@ export function createRobotModel(robot) {
   }
 
   // lift (mast + carriage + arm)
-  const tall = id === 'climber' ? 1.3 : id === 'stacker' ? 1.0 : 0.85;
+  const tall = pm.mastHeight || (id === 'climber' ? 1.3 : id === 'stacker' ? 1.0 : 0.85);
   const mastX = -0.25;
   const inner = [];
   const rails = id === 'stacker' || id === 'climber' ? [0] : [-0.3, 0.3];
   for (const z of rails) {
     body.add(bx(0.12, tall, 0.12, id === 'climber' ? frameMat() : alu(), mastX - 0.04, 0.2 + tall / 2, z));
-    const st = bx(0.09, 1, 0.09, orange(), mastX, 0, z);
+    const st = bx(0.09, 1, 0.09, acc, mastX, 0, z);
     body.add(st); inner.push(st);
   }
   const carriage = new THREE.Group(); carriage.position.set(mastX, TIER_H.stow, 0);
   body.add(carriage);
-  carriage.add(bx(0.12, 0.14, rails.length > 1 ? 0.7 : 0.2, orange(), 0, 0, 0));
+  carriage.add(bx(0.12, 0.14, rails.length > 1 ? 0.7 : 0.2, acc, 0, 0, 0));
   const arm = bx(1, 0.06, 0.12, alu(), 0.3, 0, 0);
   carriage.add(arm);
   const hook = cyl(0.025, 0.14, alu(), 0.6, 0.06, 0, 'y');
@@ -131,7 +185,7 @@ export function createRobotModel(robot) {
     const sh = new THREE.Group(); sh.position.set(-0.05, 0.42, 0); sh.rotation.z = Math.PI / 5; body.add(sh);
     sh.add(bx(0.7, 0.28, 0.36, frameMat(), 0, 0, 0));
     for (const dx of [0.2, 0.38]) {
-      const w = cyl(0.09, 0.3, orange(), dx, 0.12, 0); sh.add(w); wheels.push(w);
+      const w = cyl(0.09, 0.3, acc, dx, 0.12, 0); sh.add(w); wheels.push(w);
     }
     sh.add(bx(0.7, 0.04, 0.4, alu(), 0, 0.15, 0));
   }
@@ -146,15 +200,12 @@ export function createRobotModel(robot) {
   if (id === 'stacker') body.add(bx(0.3, 0.2, 0.3, frameMat(), -0.05, 0.3, 0)); // electronics
 
   // player marker
-  const marker = new THREE.Group(); marker.visible = false;
-  const mmat = new THREE.MeshBasicMaterial({ color: 0xffe14d, transparent: true, opacity: 0.9, depthTest: false });
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.035, 8, 32), mmat); ring.rotation.x = Math.PI / 2;
-  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.3, 4), mmat); cone.rotation.x = Math.PI; cone.position.y = 0.3;
-  marker.add(ring, cone); marker.renderOrder = 10;
+  const marker = makeMarker();
   root.add(marker);
 
   let hCur = TIER_H.stow, eCur = 0, spin = 0, wspin = 0, t = 0;
   const maxH = id === 'climber' || id === 'stacker' ? 1.8 : 1.0;
+  const markerY = tall + 0.9;
 
   function update(rs, dt = 0.016, isPlayer = rs.isPlayer) {
     t += dt;
@@ -180,7 +231,7 @@ export function createRobotModel(robot) {
       hooks.position.y = 0.2 + tall - 0.25 + c * 0.25;
     }
     marker.visible = !!isPlayer;
-    if (isPlayer) { marker.position.y = 1.9 + Math.sin(t * 3) * 0.08 + (id === 'climber' ? 0.5 : 0); marker.rotation.y = t * 1.5; }
+    if (isPlayer) { marker.position.y = markerY + Math.sin(t * 3) * 0.08; marker.rotation.y = t * 1.5; }
   }
   update({ ...robot, x: 0, z: 0, heading: 0, armTier: 'stow', arm: 0 }, 1);
   return { object: root, update, carry, root };

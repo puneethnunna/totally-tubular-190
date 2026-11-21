@@ -2,9 +2,9 @@
 // main.js MUST call tracker.onEvents(sim.drainEvents()) each frame (launch events drive G106).
 import { SIDES, ROBOT, ALLIANCES, opponent, inRect } from './config.js';
 
-const R = ROBOT.radius, SPACE = 1.83, ESC = 3;
-const touches = (rc, r) => Math.hypot(r.x - Math.max(rc.x0, Math.min(rc.x1, r.x)), r.z - Math.max(rc.z0, Math.min(rc.z1, r.z))) < R;
-const crossed = (r) => (r.alliance === 'blue' ? r.x + R < 0 : r.x - R > 0); // robots start in their own scoring zone: blue at +x
+const R0 = ROBOT.radius, rad = (r) => r.radius ?? R0, SPACE = 1.83, ESC = 3;
+const touches = (rc, r) => Math.hypot(r.x - Math.max(rc.x0, Math.min(rc.x1, r.x)), r.z - Math.max(rc.z0, Math.min(rc.z1, r.z))) < rad(r);
+const crossed = (r) => (r.alliance === 'blue' ? r.x + rad(r) < 0 : r.x - rad(r) > 0); // robots start in their own scoring zone: blue at +x
 
 // Pair rules: offender r, victim o. `ok` = offender-side condition besides contact.
 const RULES = [
@@ -28,7 +28,7 @@ export function createFoulTracker() {
     const S = sim.state, t = S.time, ph = match.phase;
     for (const e of pending.splice(0)) { // G106
       const r = S.robots.find((x) => x.id === e.robotId);
-      if (r && !inRect(SIDES[r.alliance].scoringZone, r.x, r.z, R)) add(t, 'G106', 'tech', r, `${r.number} launched outside its SCORING ZONE`);
+      if (r && !inRect(SIDES[r.alliance].scoringZone, r.x, r.z, rad(r))) add(t, 'G106', 'tech', r, `${r.number} launched outside its SCORING ZONE`);
     }
     for (const r of S.robots) { // G105
       const inside = ph === 'auto' && ALLIANCES.some((a) => touches(SIDES[a].loadingZone, r));
