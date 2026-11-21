@@ -8,7 +8,7 @@ const [RBM, PV, IMP] = await Promise.all([opt('./robots.js'), opt('./preview3d.j
 
 // ---------- settings ----------
 const KEY = 'tt-settings';
-export const DEFAULTS = { quality: 'high', background: true, camera: 'driver', cameraFollow: 'smooth', hideGui: false, fieldRelative: true, autoHP: true,
+export const DEFAULTS = { quality: 'high', background: true, camera: 'driver', cameraFollow: 'smooth', hideGui: false, fieldRelative: true, autoHP: true, autoAlign: true,
   driverName: '', volume: 100, speeds: [40, 70, 100], midfield: 8, difficulty: 'normal', mode: '1v1', alliance: 'blue', robotId: '', keys: {}, pad: {}, padCfg: { ...DEFAULT_PADCFG }, ctlVersion: 0, showStats: false };
 export function loadSettings() {
   let s = {};
@@ -555,8 +555,9 @@ export function createUI(app) {
       const sp = [0, 1, 2].map((i) => rowSlider(`Speed ${i + 1} (key ${i + 1})`, 10, 100, 5, () => st.speeds[i], (v) => { st.speeds[i] = v; save(); }));
       const mid = rowSlider('Midfield tubes per alliance', 0, 8, 1, () => st.midfield, (v) => { st.midfield = v; save(); }, (v) => v);
       const hp = rowTog('Human player auto-feed', OO, () => st.autoHP, (v) => { st.autoHP = v; save(); });
-      rows = [r1, vol, ...sp, mid, hp];
-      nodes = [group('Driver', [r1]), group('Sound', [vol]), group('Controls', sp), group('Match', [mid, hp])];
+      const aal = rowTog('Auto-align (Place inside your scoring zone)', OO, () => st.autoAlign !== false, (v) => { st.autoAlign = v; save(); });
+      rows = [r1, vol, ...sp, aal, mid, hp];
+      nodes = [group('Driver', [r1]), group('Sound', [vol]), group('Controls', [...sp, aal]), group('Match', [mid, hp])];
     } else if (t === 'display') {
       const q = rowTog('Graphics', [{ v: 'low', t: 'Low' }, { v: 'high', t: 'High' }], () => st.quality, (v) => { st.quality = v; save(); });
       const bg = rowTog('Background (stands + crowd)', OO, () => st.background, (v) => { st.background = v; save(); });
@@ -595,6 +596,7 @@ export function createUI(app) {
   // ---------- HUD ----------
   $hud.innerHTML = `<div class="sbw"><div class="sb"><div class="sbox red" id="rs">0</div><div class="sclk"><div class="t" id="clk">2:05</div><div class="ph" id="ph">READY</div></div><div class="sbox blue" id="bs">0</div></div></div>
     <div class="bl"><div class="tubes"><div class="tube"></div><div class="tube"></div></div><div class="pn" id="pn"></div><div class="pl" id="pl"></div><div class="prog"><i id="pg"></i></div></div>
+    <div class="aa" id="aa" hidden><div class="chip"><svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="9" class="trk"/><circle cx="12" cy="12" r="9" class="arc" id="aaring" pathLength="100"/></svg><b>AUTO-ALIGN</b><span id="aat"></span></div><div class="line"><i id="aal"></i></div></div>
     <div class="br"><div class="hst" id="hst"></div><div class="hints" id="hints"></div></div>
     <div class="stats" id="stats" hidden></div><div class="bd" id="bd" hidden></div>`;
   const $ = (id) => $hud.querySelector('#' + id);
@@ -631,6 +633,8 @@ export function createUI(app) {
     const ph = $('ph'); ph.textContent = PHL[match?.phase] || ''; ph.classList.toggle('endgame', match?.phase === 'endgame');
     $('rs').textContent = score?.red?.total ?? 0; $('bs').textContent = score?.blue?.total ?? 0;
     $hud.querySelectorAll('.tube').forEach((t, i) => t.classList.toggle('on', i < (me?.held?.length ?? 0)));
+    const aaEl = $('aa'); aaEl.hidden = !d.auto;
+    if (d.auto) { const pr = Math.round(100 * (d.auto.progress || 0)); $('aat').textContent = d.auto.label; $('aaring').style.strokeDasharray = `${pr} 100`; $('aal').style.width = pr + '%'; }
     const a = me?.action; $('pg').style.width = a && a.duration ? `${Math.min(100, (100 * a.t) / a.duration)}%` : '0%'; $('pl').textContent = a ? a.type.toUpperCase() : '';
     $('hst').textContent = `${(CAMNAME[camera] || camera).toUpperCase()}  ·  TIER ${tierLabel(tier)}  ·  SPEED ${Math.round((cap ?? 1) * 100)}%`;
   }

@@ -269,3 +269,12 @@ body.nogui .bl,body.nogui .br{display:none}
 .bdc{min-width:340px;padding:14px 18px;border:1px solid var(--line-strong);border-radius:12px;background:#0c0d10ee;backdrop-filter:blur(6px)}
 .bdc h4{margin:0 0 8px;font-family:var(--hf);font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold)}
 .bdc table{font-size:12px}.bdc .n{text-align:right}
+
+/* AutoAlign HUD chip */
+.aa{position:absolute;left:50%;bottom:92px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:stretch;gap:5px;min-width:210px}
+.aa[hidden]{display:none}
+.aa .chip{display:flex;align-items:center;gap:9px;padding:6px 14px 6px 8px;border-radius:999px;background:rgba(10,12,18,.82);border:1px solid var(--gold);color:var(--gold);font-weight:800;font-size:12px;letter-spacing:.08em;box-shadow:0 2px 12px rgba(0,0,0,.45)}
+.aa .chip span{margin-left:auto;color:#fff;letter-spacing:.04em}
+.aa svg{transform:rotate(-90deg)}.aa .trk,.aa .arc{fill:none;stroke-width:3}.aa .trk{stroke:#2e3340}.aa .arc{stroke:var(--gold);stroke-linecap:round;stroke-dasharray:0 100;transition:stroke-dasharray .12s linear}
+.aa .line{height:3px;background:#2a2a2a;border-radius:3px;overflow:hidden}.aa .line i{display:block;height:100%;width:0;background:var(--gold);transition:width .12s linear}
+body.nogui .aa{display:none}

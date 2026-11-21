@@ -9,6 +9,14 @@ t('default keyboard map has no duplicate keys', () => {
   for (const id of ACTION_IDS) assert.ok(id in DEFAULT_KEYS, id);
   assert.equal(DEFAULT_KEYS.place.includes('Space'), true);
 });
+t('default keys: W/S forward/back, A/D strafe, J/L turn; arrows are secondary', () => {
+  const k = effectiveKeys({});
+  assert.equal(k.up[0], 'KeyW'); assert.equal(k.down[0], 'KeyS'); assert.equal(k.left[0], 'KeyA'); assert.equal(k.right[0], 'KeyD'); assert.equal(k.rotL[0], 'KeyJ'); assert.equal(k.rotR[0], 'KeyL');
+  assert.deepEqual(k.up.slice(1), ['ArrowUp']); assert.deepEqual(k.rotL.slice(1), ['ArrowLeft']); assert.deepEqual(k.left, ['KeyA']); assert.deepEqual(k.right, ['KeyD']);
+  assert.equal(DEFAULT_KEYS.intake[0], 'ShiftLeft'); assert.equal(DEFAULT_KEYS.place[0], 'Space'); assert.deepEqual(DEFAULT_KEYS.tier, ['KeyZ']); assert.deepEqual(DEFAULT_KEYS.drop, ['KeyQ']);
+  assert.deepEqual(DEFAULT_KEYS.climb, ['KeyG']); assert.deepEqual(DEFAULT_KEYS.tube, ['KeyX']); assert.deepEqual(DEFAULT_KEYS.stow, ['KeyE']); assert.deepEqual(DEFAULT_KEYS.camera, ['KeyC']); assert.deepEqual(DEFAULT_KEYS.slot, ['KeyV']);
+  assert.equal(CTL_VERSION, 3);
+});
 t('default controller map has no duplicate bindings', () => { assert.deepEqual(findPadDuplicates(effectivePad({})), []); assert.equal(DEFAULT_PAD.place, 'b7'); assert.equal(DEFAULT_PAD.intake, 'b6'); });
 t('player 2 keys do not collide with player 1 globals', () => {
   const g = new Set(['pause', 'restart', 'camera', 'slot', 'stats', 'breakdown', 'fullscreen'].flatMap((i) => DEFAULT_KEYS[i]));
@@ -41,6 +49,8 @@ t('migration: old saved settings reset controls to new defaults but keep other s
   assert.equal(m.ctlVersion, CTL_VERSION); assert.deepEqual(m.keys, {}); assert.deepEqual(m.pad, {}); assert.equal(m.padCfg.deadzone, 12);
   assert.equal(m.quality, 'low'); assert.deepEqual(m.speeds, [30, 60, 90]);
   assert.deepEqual(migrateControls(undefined).keys, {});
+  const v2 = migrateControls({ ctlVersion: 2, keys: { up: ['KeyI'], rotL: ['KeyU'] }, pad: { camera: 'b13' } }); // v2 bindings migrate to the v3 defaults
+  assert.deepEqual(v2.keys, {}); assert.equal(effectiveKeys(v2.keys).up[0], 'KeyW'); assert.equal(effectiveKeys(v2.keys).rotL[0], 'KeyJ'); assert.deepEqual(v2.pad, {});
 });
 t('migration: current-version settings are kept, sanitised and de-duplicated', () => {
   const ok = migrateControls({ ctlVersion: CTL_VERSION, keys: { tier: ['KeyT'], bogus: ['KeyP'] }, pad: { camera: 'b13' }, padCfg: { deadzone: 99, rumble: 'x', device: 2 } });

@@ -2,10 +2,9 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { SIDES, ROBOT, TUBE, FIELD } from './config.js';
 import { buildField } from './field3d.js';
-import { createRobotModel, getTubeAssets } from './models.js';
+import { createRobotModel, getTubeAssets, LIFT } from './models.js';
 
 const MAX_TUBES = 216;
-const TIER_STOW = new Set(['stow', 'floor']);
 
 // Driver-station centers (z) per alliance, slot 0..2 = left..right as that alliance's drivers see the field.
 // Measured from the CAD's station dividers (blue end: dividers at z = -1.70, 0.14, 2.0, 3.84; red is the (x,z) mirror).
@@ -191,33 +190,80 @@ export function createRenderer(canvas) {
     for (const [id, e] of models) if (!seen.has(id)) { scene.remove(e.model.object); models.delete(id); }
   }
 
+  // ---- tube poses ----
+  // Every tube keeps a render record. When its (state, slot) key changes (picked up, handed to a post, slot shift...) the
+  // displayed pose eases from where it was last drawn to the new target pose, so tubes slide instead of snapping.
+  // ---- tube poses ----
+  // Every tube keeps a render record. When its (state, slot) key changes (picked up, handed to a post, slot shift...) the
+  // displayed pose eases from where it was last drawn to the new target pose, so tubes slide instead of snapping.
   const AX = new THREE.Vector3();
-  function syncTubes(state) {
+  const recs = new Map(), postMap = new Map(), byRobot = new Map(), tgtP = new THREE.Vector3(), tgtQ = new THREE.Quaternion();
+  const ST = { floor: 0, chute: 1, held: 2, post: 3, flight: 4 };
+  const newRec = () => ({ key: -1, p: new THREE.Vector3(), q: new THREE.Quaternion(), fp: new THREE.Vector3(), fq: new THREE.Quaternion(), t: 0, dur: 0, hop: 0, holder: null, st: '' });
+  const easeS = (u) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
+  const PEG_FINAL = LIFT.FINAL, PEG_GAP = 0.14;   // tube center rests FINAL beyond the tip toward the wall; older tubes are pushed back 0.14 each
+
+  function syncTubes(state, dt) {
     let n = 0;
     const t = state.time || 0;
-    const byRobot = new Map(state.robots.map((r) => [r.id, r]));
-    const slot = new Map();
+    byRobot.clear();
+    for (const r of state.robots) byRobot.set(r.id, r);
+    postMap.clear();
+    for (const p of state.posts) postMap.set(p.id, p);
     for (const tb of state.tubes) {
       if (n >= MAX_TUBES) break;
-      v3.set(tb.x, tb.y, tb.z);
-      Q.tmp.copy(Q.flat); // lying flat
-      let yaw = null;     // vertical ring: axis along (sin yaw, 0, cos yaw)
+      let rec = recs.get(tb.id);
+      const fresh = !rec;
+      if (fresh) recs.set(tb.id, (rec = newRec()));
+      let slot = 0, hopH = 0;
+      tgtP.set(tb.x, tb.y, tb.z);
+      Q.tmp.copy(Q.flat);  // lying flat
+      let yaw = null;      // vertical ring: axis along (sin yaw, 0, cos yaw)
+      let model = null;
       if (tb.state === 'held') {
         const r = byRobot.get(tb.holder), e = r && models.get(r.id);
         if (e) {
-          const i = slot.get(r.id) || 0; slot.set(r.id, i + 1);
-          e.model.carry.getWorldPosition(v3);
-          if (!TIER_STOW.has(r.armTier) && r.arm > 0.3) yaw = Math.PI / 2 - r.heading;
-          else { v3.y += i * 0.16; Q.tmp.premultiply(Q.tmp2.setFromAxisAngle(Y, -r.heading)); }
+          model = e.model;
+          slot = Math.max(0, Math.min(1, r.held.indexOf(tb.id)));
+          (model.carries ? model.carries[slot] : model.carry).getWorldPosition(tgtP);
+          const bl = model.lift ? model.lift.blend : 0;
+          yaw = Math.PI / 2 - r.heading * (1 - bl);     // ring axis follows the claw; lines up with the peg axis (x) as it extends
         }
-      } else if (tb.state === 'post') yaw = Math.PI / 2;
-      else if (tb.state === 'chute') yaw = 0;
+      } else if (tb.state === 'post') {
+        const p = postMap.get(tb.post);
+        if (p) {
+          slot = Math.max(0, p.tubes.length - 1 - tb.stackIndex);    // newest tube sits at the tip, older ones are pushed toward the wall
+          tgtP.set(p.tipX - p.dirX * (PEG_FINAL + PEG_GAP * slot), p.y, p.z);
+        }
+        yaw = Math.PI / 2;
+      } else if (tb.state === 'chute') yaw = 0;
       else if (tb.state === 'flight') {
         AX.set(-tb.vz, 0, tb.vx);
         if (AX.lengthSq() > 1e-6) Q.tmp.premultiply(Q.tmp2.setFromAxisAngle(AX.normalize(), t * 7));
       }
       if (yaw !== null) Q.tmp.setFromAxisAngle(Y, yaw);
-      tubes.setMatrixAt(n++, m4.compose(v3, Q.tmp, ONE));
+      tgtQ.copy(Q.tmp);
+
+      const key = (ST[tb.state] ?? 0) * 8 + slot;
+      if (fresh) { rec.key = key; rec.st = tb.state; rec.dur = 0; }
+      else if (key !== rec.key) {
+        const from = rec.st, to = tb.state;
+        let dur = 0.18;
+        if (from === 'held' && to === 'post') dur = (rec.holder && rec.holder.lift && rec.holder.lift.slideT) || LIFT.SLIDE;   // claw pushes it onto the peg
+        else if ((from === 'floor' || from === 'chute') && to === 'held') { dur = 0.34; hopH = 0.1; }                       // intake pulls it in
+        else if (from === 'held' && to === 'flight') dur = 0.05;
+        else if (from === 'flight') dur = 0.05;
+        if (dur > 0) { rec.fp.copy(rec.p); rec.fq.copy(rec.q); rec.t = 0; rec.dur = dur; rec.hop = hopH; }
+        rec.key = key; rec.st = tb.state;
+      }
+      if (rec.dur > 0 && rec.t < rec.dur) {
+        rec.t += dt;
+        const s = easeS(rec.t / rec.dur);
+        rec.p.lerpVectors(rec.fp, tgtP, s); rec.p.y += Math.sin(Math.PI * s) * rec.hop;
+        rec.q.slerpQuaternions(rec.fq, tgtQ, s);
+      } else { rec.p.copy(tgtP); rec.q.copy(tgtQ); rec.dur = 0; }
+      rec.holder = tb.state === 'held' ? model : rec.holder;
+      tubes.setMatrixAt(n++, m4.compose(rec.p, rec.q, ONE));
     }
     tubes.count = n;
     tubes.instanceMatrix.needsUpdate = true;
@@ -227,7 +273,7 @@ export function createRenderer(canvas) {
     const now = performance.now();
     const dt = Math.min(0.1, (now - last) / 1000); last = now;
     syncRobots(sim.state.robots, dt);
-    syncTubes(sim.state);
+    syncTubes(sim.state, dt);
     if (mode !== 'free') {
       cameraTargets(sim);
       const locked = follow === 'locked' && (mode === 'third' || mode === 'first' || (mode === 'driver' && trackRobot));

@@ -33,7 +33,7 @@ export const DEFAULT_PADCFG = { device: 'auto', flipAB: false, flipXY: false, de
 export const K2 = { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], rotL: ['Comma'], rotR: ['Slash'], intake: ['Semicolon'],
   place: ['Enter'], tier: ['KeyN'], drop: ['Quote'], climb: ['KeyP'], tube: ['KeyO'], stow: ['KeyI'] };
 
-export const CTL_VERSION = 2;
+export const CTL_VERSION = 3; // v3: W/S forward/back, A/D strafe, J/L turn (arrows are secondary)
 export const MAX_CHIPS = 2;
 
 // ---------- labels ----------
@@ -220,7 +220,8 @@ export function createInput() {
     if (!enabled) return {};
     const S = SIDES[alliance], pad = padFor(pi), pc = cfg.padCfg || DEFAULT_PADCFG, cap = o.cap ?? 1;
     const pv = (id) => (pad ? readBinding(pad, PD[id], pc) : 0);
-    let fx = (held('right', pi) ? 1 : 0) - (held('left', pi) ? 1 : 0), fy = (held('up', pi) ? 1 : 0) - (held('down', pi) ? 1 : 0);
+    const kx = (held('right', pi) ? 1 : 0) - (held('left', pi) ? 1 : 0);
+    let fx = kx, fy = (held('up', pi) ? 1 : 0) - (held('down', pi) ? 1 : 0);
     let rot = (held('rotR', pi) ? 1 : 0) - (held('rotL', pi) ? 1 : 0);
     if (pad) {
       const ax = pv('right') - pv('left'), ay = pv('up') - pv('down'), rx = pv('rotR') - pv('rotL');
@@ -237,10 +238,11 @@ export function createInput() {
     };
     for (const k of ['place', 'drop', 'tierToggle', 'requestTube', 'stow']) out[k] = !!out[k];
     if (o.drive === 'tank') {
-      const kbTurn = rot + (held('right', pi) ? 1 : 0) - (held('left', pi) ? 1 : 0);
+      // Tank robots cannot strafe: keyboard A/D do nothing (one-time hint via out.noStrafe). Turning is J/L (or the R stick); the L stick X still steers on a pad.
+      const padX = pad ? pv('right') - pv('left') : 0;
       out.throttle = clamp(fy) * cap;
-      out.turn = clamp(Math.abs(kbTurn) > Math.abs(fx) ? kbTurn : fx) * cap;
-      if (pad && Math.abs(rot) > Math.abs(out.turn)) out.turn = rot * cap;
+      out.turn = clamp(Math.abs(rot) >= Math.abs(padX) ? rot : padX) * cap;
+      out.noStrafe = kx !== 0;
     } else {
       const m = Math.hypot(fx, fy); if (m > 1) { fx /= m; fy /= m; }
       let F = S.screenForward, R = S.screenRight;

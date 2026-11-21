@@ -2,6 +2,7 @@
 import { SIDES, opponent } from './config.js';
 import { createInput, planPlace, nextTier, tierLabel } from './input.js';
 import { createUI, loadSettings, saveSettings, ensureMeshes } from './ui.js';
+import { createAutoAlign, ZONE_MSG } from './autoalign.js';
 
 const STEP = 1 / 120;
 const stubQ = new URLSearchParams(location.search).get('stubs') || '';
@@ -63,7 +64,7 @@ async function startGame(cfg) {
   const add = (al, slot, def, start, human) => {
     const id = `${al}-${slot}`;
     robots.push({ id, alliance: al, slot, number: def.number, preset: stubSim ? def.preset.id : def.preset, start, preload: true });
-    if (human !== undefined) p.push({ id, alliance: al, pi: human, def });
+    if (human !== undefined) p.push({ id, alliance: al, pi: human, def, auto: createAutoAlign() });
     else bots[id] = M.ai.createBot(id, al, cfg.difficulty);
   };
   add(A, 0, cfg.player, cfg.start, 0);
@@ -78,7 +79,7 @@ async function startGame(cfg) {
   }
   const match = M.match.createMatch(sim);
   input.setPlayers(p.length); input.setEnabled(true);
-  game = { sim, match, p, bots, state: 'countdown', cdEnd: performance.now() + 3400, acc: 0, phase: 'pre', cam: settings.camera, slot: 0, tier: 'auto', tier2: 'auto', stow: {}, cap: settings.speeds[2] / 100, cfg };
+  game = { sim, match, p, bots, state: 'countdown', cdEnd: performance.now() + 3400, acc: 0, phase: 'pre', cam: settings.camera, slot: 0, tier: 'auto', tier2: 'auto', stow: {}, carry: {}, strafeHint: false, cap: settings.speeds[2] / 100, cfg };
   document.body.classList.add('playing');
   ui.show('none', false); ui.showHUD(true, p[0].def);
   bdOn = false; ui.showBreakdown(false); ui.showStats(!!settings.showStats);
@@ -92,8 +93,10 @@ function quit(to = 'title') {
 }
 
 const robotOf = (id) => game?.sim.state.robots.find((r) => r.id === id);
-const hud = () => ({ match: game.match, score, me: robotOf(game.p[0].id), camera: game.cam, tier: game.tier, cap: game.cap, device: input.lastDevice(), stats: statsInfo() });
+const autoInfo = () => { const a = game.p[0].auto; return a.active ? { label: a.target?.label || '', progress: a.progress, phase: a.phase } : null; };
+const hud = () => ({ match: game.match, score, me: robotOf(game.p[0].id), auto: autoInfo(), camera: game.cam, tier: game.tier, cap: game.cap, device: input.lastDevice(), stats: statsInfo() });
 const EDGES = ['scoreLower', 'scoreUpper', 'scoreFloor', 'launch', 'place', 'drop', 'stow', 'tierToggle', 'requestTube'];
+const ACT_EDGES = ['scoreLower', 'scoreUpper', 'scoreFloor', 'launch'];
 const PHASE_MSG = { auto: 'AUTO — go!', teleop: 'TELEOP', endgame: 'ENDGAME — climb!', post: 'Match over' };
 let fps = 60;
 const statsInfo = () => { const r = game && robotOf(game.p[0].id); return { fps, speed: r ? Math.hypot(r.vx || 0, r.vz || 0) : 0 }; };
@@ -114,7 +117,7 @@ function eventToast(e) {
   ui.toast(e.text || msg, { alliance: r?.alliance, tag: e.type === 'invalid' ? '!' : '' });
 }
 
-function pause() { if (!game || game.state !== 'run' || paused) return; paused = true; game.match.pause?.(); input.setEnabled(false); const q = game.p[0]; ui.showPause({ alliance: q.alliance, label: `${q.def.number} ${q.def.name}` }); }
+function pause() { if (!game || game.state !== 'run' || paused) return; paused = true; game.p.forEach((q) => q.auto.cancel('')); game.match.pause?.(); input.setEnabled(false); const q = game.p[0]; ui.showPause({ alliance: q.alliance, label: `${q.def.number} ${q.def.name}` }); }
 function resume() { paused = false; game?.match?.resume?.(); input.setEnabled(true); }
 
 function frame(t) {
@@ -150,16 +153,37 @@ function frame(t) {
       if (i.tierToggle) { game[tk] = nextTier(game[tk], !!pr.canUpper); ui.toast(`Post tier: ${tierLabel(game[tk])}`, { tag: 'Z', alliance: q.alliance }); }
       if (i.requestTube && match.phase !== 'auto') { if (sim.requestHumanTube?.(q.alliance) === false) ui.toast('Human player not available', { alliance: q.alliance }); }
       if (i.drop) i.scoreFloor = true;
+      if (i.noStrafe && !game.strafeHint) { game.strafeHint = true; ui.toast('Tank drive cannot strafe — turn with J / L', { tag: '!', alliance: q.alliance }); }
+      const aa = q.auto, live = ['auto', 'teleop', 'endgame'].includes(match.phase);
+      let justStarted = false;
+      if (aa.active && (!r || !live)) aa.cancel('');
       if (i.place && r) {
-        const plan = planPlace({ robot: r, preset: pr, mode: game[tk], posts: SIDES[q.alliance].posts, tune: sim.tune });
-        if (plan.act) i[plan.act] = true; else ui.toast(plan.why, { tag: '!', alliance: q.alliance });
+        if (aa.active) { aa.cancel(); ui.toast('Auto-align cancelled', { tag: '!', alliance: q.alliance }); }
+        else if (settings.autoAlign !== false) {
+          const res = aa.start(sim, q.id, game[tk]);
+          if (res.ok) { justStarted = true; ui.toast(`Auto-align → ${res.target}`, { tag: '⌖', alliance: q.alliance }); }
+          else ui.toast(res.reason, { tag: '!', alliance: q.alliance });
+        } else {
+          const plan = planPlace({ robot: r, preset: pr, mode: game[tk], posts: SIDES[q.alliance].posts, tune: sim.tune });
+          if (plan.act) i[plan.act] = true; else ui.toast(plan.why, { tag: '!', alliance: q.alliance });
+        }
       }
+      if (aa.active && !i.place) {
+        const out = aa.step(sim, justStarted ? 0 : dt, justStarted ? null : i);
+        if (out) Object.assign(i, { moveX: 0, moveZ: 0, rotate: 0, throttle: 0, turn: 0 }, out);
+        else if (aa.result && !aa.result.ok && aa.result.reason && aa.result.reason !== 'Auto-align cancelled') ui.toast(aa.result.reason, { tag: '!', alliance: q.alliance });
+        else if (aa.result && aa.result.reason === 'Auto-align cancelled') ui.toast('Auto-align cancelled', { tag: '⌖', alliance: q.alliance });
+      } else if (aa.active && justStarted) {
+        const out = aa.step(sim, 0, null); if (out) Object.assign(i, { moveX: 0, moveZ: 0, rotate: 0, throttle: 0, turn: 0 }, out);
+      }
+      if (game.carry[q.id]) { for (const k of ACT_EDGES) if (game.carry[q.id][k]) i[k] = true; game.carry[q.id] = null; } // an edge from a frame that ran no sim step
       if (i.stow) { game.stow[q.id] = t + 450; ui.toast('Arm stowed', { tag: 'E', alliance: q.alliance }); }
       if (t < (game.stow[q.id] || 0)) i.intake = false;
       frameIn[q.id] = i;
     }
     game.acc += dt;
     let first = true;
+    if (game.acc < STEP) for (const q of game.p) { const e = {}; for (const k of ACT_EDGES) if (frameIn[q.id][k]) e[k] = true; game.carry[q.id] = Object.keys(e).length ? e : null; }
     while (game.acc >= STEP) {
       const inputs = {}, ph = match.phase, live = ph === 'auto' || ph === 'teleop' || ph === 'endgame';
       if (live) {

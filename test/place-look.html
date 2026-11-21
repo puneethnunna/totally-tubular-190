@@ -1,0 +1,79 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Place / intake animation check</title>
+<style>html,body{margin:0;height:100%;background:#111;overflow:hidden;color:#eee;font:12px system-ui}canvas{width:100%;height:100%;display:block}
+#hud{position:fixed;left:8px;top:8px;background:#000a;padding:6px 8px;border-radius:6px}</style>
+<script type="importmap">{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}</script></head>
+<body><canvas id="c"></canvas><div id="hud">t=0</div>
+<script type="module">
+// Fake robot state run through: intake -> place LOWER -> place UPPER next to the blue post wall (+x).
+// URL: ?style=stacker|climber|sweeper|tosser &dur=<placeTime s> &off=<bumper-face to peg tip, m> &dz=<lateral m> &post=3
+// Console: __t.at(seconds) steps deterministically (fixed clock) and renders; __t.cam(x,y,z,tx,ty,tz).
+import { createRenderer } from '../js/renderer.js';
+import { ROBOT_PRESETS, SIDES, ROBOT } from '../js/config.js';
+import { setMeshGeometry } from '../js/robots.js';
+import * as THREE from 'three';
+const q = new URLSearchParams(location.search);
+const style = q.get('style') || 'stacker', dur = +(q.get('dur') || 0), off = +(q.get('off') || 0.45), dz = +(q.get('dz') || 0.1), pi = +(q.get('post') || 3);
+let fake = 0; const realNow = performance.now.bind(performance); performance.now = () => fake;
+const r = createRenderer(document.getElementById('c'));
+r.setCameraMode('free'); window.addEventListener('resize', () => r.resize());
+let P = ROBOT_PRESETS.find((p) => p.id === style);
+if (q.get('mesh')) {   // ?mesh=1 : generic STL-style robot (a box body) to check the overlay lift/intake
+  const g = new THREE.BoxGeometry(0.7, 0.35, 0.7); g.translate(0, 0.25, 0); g.userData = { footprint: { x: 0.7, z: 0.7 }, height: 0.45 };
+  setMeshGeometry('fake-box', g); P = { ...P, model: { kind: 'mesh', meshId: 'fake-box', footprint: { x: 0.7, z: 0.7 }, height: 0.45, finish: 'aluminum' } };
+}
+const posts = SIDES.blue.posts.map((p) => ({ ...p, tubes: [] }));
+const lower = posts.find((p) => p.tier === 'lower' && p.index === pi), upper = posts.find((p) => p.tier === 'upper' && p.index === pi);
+const hx = ROBOT.outer / 2;
+const robot = { id: 'blue-0', alliance: 'blue', slot: 0, number: '1678', preset: P, x: lower.tipX - hx - off, z: lower.z + dz, y: 0, heading: 0,
+  vx: 0, vz: 0, omega: 0, held: [], action: null, arm: 0, armTier: 'stow', support: 0, intakeOn: false, contacts: [] };
+const mkTube = (id, x, z) => ({ id, x, y: 0.0635, z, vx: 0, vy: 0, vz: 0, state: 'floor', holder: null, post: null, stackIndex: -1 });
+const tubes = [mkTube('a', robot.x + hx + 0.7, robot.z + 0.15), mkTube('b', robot.x + hx + 0.6, robot.z - 0.9), mkTube('c', 3, 1)];
+tubes[2].state = 'held'; tubes[2].holder = 'blue-0'; robot.held.push('c');   // preload
+const state = { time: 0, robots: [robot], tubes, posts };
+const sim = { state };
+const dl = dur || P.placeTime * 1.0;
+// timeline (s): 0.2 intake starts (tube a pulled in over intakeTime) | 1.5 place lower | 3.6 place upper
+const T = { intake: 0.2, lower: 1.6, upper: 3.8 };
+let placing = null;
+function startPlace(post, target) { placing = { post, tube: tubes.find((t) => t.state === 'held' && t.holder === 'blue-0' && robot.held[0] === t.id), released: false }; robot.action = { type: 'place', t: 0, duration: dl, target }; robot.armTier = post.tier; }
+function tick(dt) {
+  const t = state.time;
+  // intake
+  if (t >= T.intake && (!robot.action || robot.action.type === "intake") && !tubes[0].holder) {
+    robot.intakeOn = true; const a = tubes[0], k = (t - T.intake);
+    if (!robot._it) robot._it = 0; robot._it += dt;
+    robot.action = null;
+    const px = robot.x + hx + 0.05; a.x += (px - a.x) * Math.min(1, 12 * dt); a.z += (robot.z - a.z) * Math.min(1, 12 * dt);
+    robot.action = { type: 'intake', t: robot._it, duration: P.intakeTime + 0.4, target: 'a' }; robot.armTier = 'floor';
+    if (robot._it >= P.intakeTime + 0.4) { Object.assign(a, { state: 'held', holder: 'blue-0' }); robot.held.push('a'); robot.action = null; robot.intakeOn = false; robot.armTier = 'stow'; }
+  }
+  if (!placing && t >= T.lower && !state.lowerDone) { state.lowerDone = true; startPlace(lower, lower.id); }
+  if (!placing && t >= T.upper && !state.upperDone && P.canUpper) { state.upperDone = true; startPlace(upper, upper.id); }
+  if (placing) {
+    const a = robot.action; a.t += dt; const u = Math.min(1, a.t / a.duration);
+    robot.arm = u < 0.7 ? u / 0.7 : 1 - (u - 0.7) / 0.3;
+    if (!placing.released && u >= 0.7) {
+      placing.released = true; const tb = placing.tube; const p = placing.post;
+      robot.held = robot.held.filter((i) => i !== tb.id); Object.assign(tb, { state: 'post', holder: null, post: p.id, stackIndex: p.tubes.length, x: p.tipX, y: p.y, z: p.z }); p.tubes.push(tb.id);
+    }
+    if (u >= 1) { robot.action = null; placing = null; }
+  } else robot.arm = Math.max(0, robot.arm - 4 * dt);
+  if (!robot.action) robot.armTier = 'stow';
+}
+// camera presets looking at the post wall from the side
+let cam = { p: [robot.x + 0.2, 1.6, robot.z + 5.2], t: [lower.tipX - 0.3, 1.3, robot.z] };
+function applyCam() { r.camera.position.set(...cam.p); r.camera.lookAt(...cam.t); r.camera.fov = 40; r.camera.updateProjectionMatrix(); }
+window.__t = {
+  state, robot, tubes, posts,
+  cam(px, py, pz, tx, ty, tz) { cam = { p: [px, py, pz], t: [tx, ty, tz] }; applyCam(); r.render(sim); },
+  at(target, dt = 1 / 120) { while (state.time < target - 1e-9) { state.time += dt; fake += dt * 1000; tick(dt); r.render(sim); } applyCam(); r.render(sim); document.getElementById('hud').textContent = 't=' + state.time.toFixed(2) + ' u=' + (robot.action ? (robot.action.t / robot.action.duration).toFixed(2) : '-'); },
+  // world center of tube `id` as drawn (instance matrix) -> [x,y,z]
+  drawn(id) { const im = r.scene.children.find((o) => o.isInstancedMesh); const i = state.tubes.findIndex((t) => t.id === id); const m = new (im.matrix.constructor)(); im.getMatrixAt(i, m); const e = m.elements; return [e[12], e[13], e[14]].map((v) => +v.toFixed(3)); },
+  info() { return { dl, lowerTip: lower.tipX, upperY: upper.y, robot: [robot.x, robot.z] }; },
+};
+applyCam(); r.render(sim);
+</script></body></html>

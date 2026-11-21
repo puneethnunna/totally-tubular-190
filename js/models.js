@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
-import { TUBE, ROBOT } from './config.js';
+import { TUBE, ROBOT, SIDES } from './config.js';
 import { getMeshSync } from './robots.js';
 
 // ---------- tubes ----------
@@ -228,7 +228,137 @@ export function createBumper(fx, fz, alliance, number, b = ROBOT.bumper) {
   return grp;
 }
 
-const TIER_H = { stow: 0.45, floor: 0.2, lower: 0.95, upper: 1.75 };
+// ---------- lift / arm / intake mechanisms (shared by procedural and STL robots) ----------
+// Timeline of a PLACE action (u = action.t / action.duration, release at u = 0.7 in sim.js):
+//   rise   u 0..0.50  carriage climbs from rest to the peg height (peg y - robot y)
+//   extend u 0.16..0.70  telescoping arm + cross-slide bring the tube hole to just short of the peg tip (APPROACH)
+//   slide  release .. +SLIDE seconds  claw pushes the tube onto the peg (the renderer moves the tube with it)
+//   retract/lower after the slide: slew-limited, the carriage only descends once the arm has cleared the peg
+export const LIFT = { PRONG_DY: 0.132, APPROACH: 0.094, FINAL: 0.0735, EMAX: 1.25, SLOT_GAP: 0.14, SLIDE: 0.15 };
+const POST_BY_ID = new Map();
+for (const a of ['blue', 'red']) for (const p of SIDES[a].posts) POST_BY_ID.set(p.id, p);
+const ease = (u) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
+const slew = (cur, tgt, dt, k, v) => { const d = (tgt - cur) * (1 - Math.exp(-dt * k)), m = v * dt; return cur + (d > m ? m : d < -m ? -m : d); };
+
+// cfg: { mastX, zr, tall, n (moving stages), frameM, acc, xA0, yA0 (tube hole center at rest), lazy (hide when idle) }
+function createLift(body, cfg) {
+  const { mastX, zr, tall, n, frameM, acc, xA0, yA0, lazy } = cfg;
+  const baseY = 0.1, L = Math.max(tall - 0.1, n >= 3 ? 0.85 : 0.6), armX0 = xA0 - 0.52, restH = yA0 - LIFT.PRONG_DY;
+  const root = newGroup(body), mast = newGroup(root);
+  const FB = new Batch();
+  for (const z of [-zr, zr]) {
+    FB.box(frameM, 0.062, L, 0.062, mastX, baseY + L / 2, z, 0.005);                                   // fixed stage (outer rail)
+    FB.box(A('steelChain'), 0.007, L * 0.85, 0.012, mastX + 0.036, baseY + L / 2, z, 0.002);
+    FB.box(A('plastic'), 0.08, 0.025, 0.08, mastX, baseY + 0.015, z, 0.004);
+  }
+  FB.box(frameM, 0.05, 0.04, 2 * zr + 0.06, mastX - 0.012, baseY + L - 0.03, 0, 0.004);
+  FB.box(frameM, 0.05, 0.04, 2 * zr + 0.06, mastX - 0.012, baseY + 0.08, 0, 0.004);
+  for (const sz of [-1, 1]) FB.box(frameM, 0.18, 0.03, 0.025, mastX + 0.08, baseY + 0.02, sz * (zr - 0.02), 0.004);
+  FB.build(mast);
+  const stages = [];
+  for (let k = 1; k <= n; k++) {
+    const g = newGroup(mast), SB = new Batch(), w = 0.056 - 0.006 * k, x = mastX + 0.009 * k, y0 = baseY + 0.02, mat = k % 2 ? A('aluminumBare') : acc;
+    for (const z of [-zr, zr]) {
+      SB.box(mat, w, L, w, x, y0 + L / 2, z, 0.004);
+      SB.box(A('steelChain'), 0.007, L * 0.85, 0.012, x + w / 2 + 0.004, y0 + L / 2, z, 0.002);
+      SB.cyl(A('steelChain'), 0.017, 0.012, x + w / 2 + 0.014, y0 + L + 0.012, z, 'z', 12);       // stage sprocket
+    }
+    SB.box(mat, w * 0.8, 0.035, 2 * zr + w, x, y0 + L - 0.06, 0, 0.004);
+    SB.box(mat, w * 0.8, 0.03, 2 * zr + w, x, y0 + 0.05, 0, 0.004);
+    SB.build(g); stages.push(g);
+  }
+  const carriage = newGroup(root, 0, restH, 0), CB = new Batch();
+  CB.box(acc, 0.03, 0.4, 2 * zr + 0.1, mastX + 0.065, -0.12, 0, 0.005);                              // carriage plate (overlaps the top stage)
+  for (const z of [-zr, zr]) for (const y of [-0.25, 0.05]) CB.cyl(A('aluminumSatin'), 0.014, 0.075, mastX + 0.045, y, z, 'z', 10);
+  CB.box(A('aluminumSatin'), 0.04, 0.04, 0.66, mastX + 0.09, 0, 0, 0.005);                           // cross-slide rail
+  CB.build(carriage);
+  const cart = newGroup(carriage), CT = new Batch();
+  CT.box(acc, 0.15, 0.085, 0.13, mastX + 0.09, 0, 0, 0.006);
+  CT.box(A('aluminumSatin'), 0.68, 0.052, 0.052, armX0 + 0.34, 0, 0, 0.005);                         // arm stage 1 (fixed to the cart)
+  CT.build(cart);
+  const mid = newGroup(cart), MB = new Batch();
+  MB.box(A('aluminumBare'), 0.68, 0.042, 0.042, armX0 + 0.34, 0, 0, 0.004);                          // arm stage 2
+  MB.build(mid);
+  const inner = newGroup(mid), IB = new Batch();
+  IB.cyl(A('aluminumBare'), 0.017, 0.64, armX0 + 0.32, 0, 0, 'x', 12);                               // stage 3 = the prong the tubes ride on
+  IB.box(acc, 0.022, 0.12, 0.09, xA0 - 0.235, 0, 0, 0.004);                                          // backstop
+  IB.cyl(A('aluminumBare'), 0.028, 0.016, xA0 + 0.12, 0, 0, 'x', 12);                                // tip cap
+  IB.build(inner);
+  const carries = [new THREE.Object3D(), new THREE.Object3D()];
+  root.add(carries[0], carries[1]);
+  const S = { H: restH, E: 0, Z: 0, blend: 0, wasPlacing: false, H0: restH, slideT: LIFT.SLIDE };
+  function apply() {
+    const C = Math.max(0, S.H - restH);
+    carriage.position.y = S.H;
+    for (let k = 0; k < stages.length; k++) stages[k].position.y = (C * (k + 1)) / (n + 1);
+    cart.position.z = S.Z; mid.position.x = S.E / 2; inner.position.x = S.E / 2;
+    const ax = xA0 + S.E, ay = S.H + LIFT.PRONG_DY;
+    carries[0].position.set(ax, ay, S.Z); carries[1].position.set(ax - LIFT.SLOT_GAP, ay, S.Z);
+    if (lazy) { mast.visible = C > 0.03; carriage.visible = C > 0.03 || S.E > 0.02; }
+  }
+  function step(rs, dt) {
+    const a = rs.action, post = a && a.type === 'place' && a.target !== 'floor' ? POST_BY_ID.get(a.target) : null;
+    let direct = false;
+    if (post) {
+      if (!S.wasPlacing) S.H0 = S.H;
+      const c = Math.cos(rs.heading), s = Math.sin(rs.heading), dx = post.tipX - rs.x, dz = post.z - rs.z;
+      const f = dx * c + dz * s, l = -dx * s + dz * c;
+      const Eapp = Math.min(Math.max(f - LIFT.APPROACH - xA0, 0), LIFT.EMAX), Efin = Math.min(Math.max(f + LIFT.FINAL - xA0, 0), LIFT.EMAX + 0.1);
+      const Ht = post.y - (rs.y || 0) - LIFT.PRONG_DY, d = Math.max(0.1, a.duration), u = Math.min(1, a.t / d);
+      const slideT = Math.min(LIFT.SLIDE, d * 0.27), tr = a.t - 0.7 * d;          // seconds since release
+      S.slideT = slideT;
+      if (tr < slideT + 0.001) {
+        direct = true;
+        const e1 = ease((u - 0.16) / 0.54), sl = ease(tr / slideT);
+        S.H = S.H0 + (Ht - S.H0) * ease(u / 0.5);
+        S.E = Eapp * e1 + (Efin - Eapp) * sl;
+        S.Z = Math.max(-0.3, Math.min(0.3, l)) * e1;
+        S.blend = e1;
+      }
+    }
+    S.wasPlacing = !!post;
+    if (!direct) {
+      const drop = a && a.type === 'place' && a.target === 'floor';
+      const Et = drop ? 0.3 * (rs.arm || 0) : 0;
+      S.E = slew(S.E, Et, dt, 9, 3.2);
+      S.Z = slew(S.Z, 0, dt, 9, 1.5);
+      S.H = slew(S.H, S.E > 0.25 ? S.H : restH, dt, 8, 3.4);       // wait for the claw to clear the peg before lowering
+      S.blend = slew(S.blend, 0, dt, 12, 8);
+    }
+    apply();
+  }
+  apply();
+  return { carries, step, state: S, root, mast, carriage, L, top: baseY + L };
+}
+
+// Flip-down intake: arms pivot about a frame bar, roller spins on the end. deploy 0 = raised/stowed, 1 = on the floor.
+function buildIntake(body, o) {
+  const { pivotX, pivotY, len, rwid, frameM, wheelColor, lazy } = o;
+  const pivot = newGroup(body, pivotX, pivotY, 0), AB = new Batch();
+  for (const sz of [-1, 1]) AB.box(frameM, len + 0.03, 0.035, 0.02, len / 2, 0, sz * (rwid / 2 + 0.035), 0.004);
+  AB.box(A('aluminumAnodized'), 0.045, 0.05, rwid + 0.1, 0, 0, 0, 0.005);
+  AB.build(pivot);
+  const roller = newGroup(pivot, len, 0, 0), RB = new Batch();
+  RB.cyl(A('aluminumBare'), 0.015, rwid + 0.05, 0, 0, 0, 'z', 10);
+  const nW = Math.max(3, Math.round(rwid / 0.115));
+  for (let i = 0; i < nW; i++) {
+    const zz = -rwid / 2 + 0.05 + i * ((rwid - 0.1) / (nW - 1));
+    RB.tire(getMaterial('compliantWheel', wheelColor), 0.05, 0.085, 0, 0, zz);
+    RB.cyl(A('aluminumBare'), 0.026, 0.09, 0, 0, zz, 'z', 14);
+  }
+  RB.build(roller);
+  const A0 = -0.14, A1 = -0.70;
+  let dep = 0, spin = 0;
+  function update(on, rolling, dt) {
+    dep += ((on ? 1 : 0) - dep) * (1 - Math.exp(-dt * 12));
+    spin += (rolling ? 22 : 0) * dt;
+    pivot.rotation.z = A0 + (A1 - A0) * dep;
+    roller.rotation.z = -spin;
+    if (lazy) pivot.visible = dep > 0.03;
+  }
+  update(false, false, 1);
+  return { pivot, roller, update };
+}
 
 function makeMarker() {
   const marker = new THREE.Group(); marker.visible = false;
@@ -258,24 +388,27 @@ function createMeshModel(robot, geo) {
   body.add(m);
   const b = Math.min(ROBOT.bumper, 0.09);
   body.add(createBumper(fp.x, fp.z, robot.alliance, robot.number, b));
-  const carry = new THREE.Object3D(); carry.position.set(fp.x / 2 + b + 0.1, 0.45, 0);
-  body.add(carry);
+  const frontX = fp.x / 2 + b, canUp = robot.preset.canUpper;
+  const lift = createLift(body, {
+    mastX: -fp.x / 2 + 0.05, zr: canUp ? 0.14 : 0.2, tall: canUp ? 0.95 : 0.7, n: canUp ? 3 : 2, frameM: getMaterial('aluminumAnodized'),
+    acc: getMaterial('powderCoat', model.accent ?? FINISH_DEFAULT_TEAM), xA0: frontX - 0.04, yA0: 0.6, lazy: true,
+  });
+  const intake = buildIntake(body, { pivotX: frontX - 0.3, pivotY: 0.3, len: 0.34, rwid: Math.max(0.3, fp.z * 0.7), frameM: getMaterial('aluminumAnodized'), wheelColor: 0x2f3136, lazy: true });
   const marker = makeMarker(); root.add(marker);
   const top = (ud.height || model.height || 0.8) + 0.6;
-  let hCur = TIER_H.stow, eCur = 0, t = 0;
+  let t = 0;
   function update(rs, dt = 0.016, isPlayer = rs.isPlayer) {
     t += dt;
     root.position.set(rs.x, rs.y || 0, rs.z);
     root.rotation.y = -rs.heading;
-    const k = 1 - Math.exp(-dt * 10), tier = rs.armTier || 'stow';
-    hCur += ((TIER_H[tier] ?? TIER_H.stow) - hCur) * k;
-    eCur += ((tier === 'stow' || tier === 'floor' ? 0 : rs.arm) * ROBOT.maxExtension - eCur) * k;
-    carry.position.set(fp.x / 2 + b + 0.1 + eCur, Math.max(0.3, hCur), 0);
+    lift.step(rs, dt);
+    lift.carriage.visible = lift.carriage.visible || (rs.held && rs.held.length > 0);
+    intake.update(!!(rs.intakeOn || (rs.action && rs.action.type === 'intake')), !!rs.intakeOn, dt);
     marker.visible = !!isPlayer;
     if (isPlayer) { marker.position.y = top + Math.sin(t * 3) * 0.08; marker.rotation.y = t * 1.5; }
   }
-  update({ ...robot, x: 0, z: 0, heading: 0, armTier: 'stow', arm: 0 }, 1);
-  return { object: root, update, carry, root };
+  update({ ...robot, x: 0, z: 0, heading: 0, armTier: 'stow', arm: 0, action: null }, 1);
+  return { object: root, update, carry: lift.carries[0], carries: lift.carries, lift: lift.state, root };
 }
 
 // ---------- procedural robots ----------
@@ -340,63 +473,20 @@ export function createRobotModel(robot) {
   if (tank) tankDrive(S, h, pm.tread ?? 0x3f8f52, frameM);
   else for (const sx of [-1, 1]) for (const sz of [-1, 1]) swerveModule(S, sx, sz, h, frameM);
 
-  // ---- lift: nested elevator ----
+  // ---- lift: multi-stage elevator + telescoping claw arm (S.build below merges the static chassis) ----
   const tall = pm.mastHeight || (id === 'climber' ? 1.3 : id === 'stacker' ? 1.0 : 0.85);
-  const mastX = -0.25;
-  const zr = id === 'stacker' || id === 'climber' ? 0.13 : 0.3;
-  const baseY = 0.1;
-  for (const z of [-zr, zr]) {
-    S.box(frameM, 0.055, tall, 0.055, mastX, baseY + tall / 2, z, 0.005);                  // fixed stage
-    S.box(A('steelChain'), 0.008, tall * 0.9, 0.012, mastX + 0.034, baseY + tall / 2, z, 0.002);   // chain run
-    S.cyl(A('steelChain'), 0.02, 0.014, mastX + 0.034, baseY + tall + 0.02, z, 'z', 16);   // top sprocket
-    S.box(A('plastic'), 0.07, 0.025, 0.07, mastX, baseY + 0.015, z, 0.004);             // base block
-  }
-  S.box(frameM, 0.05, 0.04, 2 * zr + 0.055, mastX - 0.01, baseY + tall - 0.03, 0, 0.004);  // top cross tube
-  S.box(frameM, 0.05, 0.04, 2 * zr + 0.055, mastX - 0.01, baseY + 0.08, 0, 0.004);         // bottom cross tube
-  for (const sz of [-1, 1]) S.box(frameM, 0.18, 0.03, 0.025, mastX + 0.08, baseY + 0.02, sz * (zr - 0.02), 0.004, 0, 0, 0);
+  const canUpper = preset.canUpper !== undefined ? preset.canUpper : (id === 'stacker' || id === 'climber');
+  const wide = !canUpper && id !== 'climber';
+  const zr = wide ? 0.3 : 0.13, mastX = wide ? -0.3 : -0.34;
+  const lowStow = id === 'sweeper' || id === 'tosser';
+  const lift = createLift(body, { mastX, zr, tall, n: canUpper ? 3 : 2, frameM, acc, xA0: lowStow ? 0.47 : 0.30, yA0: lowStow ? 0.62 : 0.55, lazy: false });
+  const carries = lift.carries;
+  const tallB = lift.top;
 
-  const stages = [];
-  const stageDefs = [[0.047, 0.96, 'aluminumBare'], [0.039, 0.96, null]];
-  for (const [w, lf, mname] of stageDefs) {
-    const g = newGroup(body, 0, 0, 0), SB = new Batch(), L = tall * lf, mat = mname ? A(mname) : acc;
-    for (const z of [-zr, zr]) {
-      SB.box(mat, w, L, w, mastX + (mname ? 0.005 : 0.008), baseY + 0.02 + L / 2, z, 0.004);
-    }
-    SB.box(mat, w * 0.8, 0.035, 2 * zr + w, mastX + (mname ? 0.005 : 0.008), baseY + 0.02 + L - 0.1, 0, 0.004);
-    SB.build(g);
-    stages.push(g);
-  }
-
-  const carriage = newGroup(body, mastX, TIER_H.stow, 0);
-  const CB = new Batch();
-  CB.box(acc, 0.045, 0.15, 2 * zr + 0.075, 0.035, 0, 0, 0.006);
-  CB.box(A('aluminumSatin'), 0.04, 0.03, 2 * zr + 0.075, 0.045, 0.07, 0, 0.004);
-  for (const z of [-zr, zr]) for (const y of [-0.05, 0.05]) CB.cyl(A('aluminumSatin'), 0.014, 0.065, 0.012, y, z, 'z', 12);   // carriage rollers
-  CB.box(A('aluminumSatin'), 0.07, 0.07, 0.1, 0.08, 0.0, 0, 0.006);                                                     // arm mount
-  CB.box(A('aluminumSatin'), 0.62, 0.045, 0.07, 0.38, 0, 0, 0.006);                                                         // fixed arm tube
-  CB.build(carriage);
-  const tip = newGroup(carriage, 0, 0, 0);
-  const TB = new Batch();
-  TB.box(A('aluminumBare'), 0.6, 0.035, 0.05, 0.4, 0, 0, 0.005);                                                            // sliding arm tube
-  TB.box(A('aluminumBare'), 0.05, 0.1, 0.12, 0.7, 0, 0, 0.006);                                                         // wrist
-  TB.cyl(A('aluminumBare'), 0.022, 0.15, 0.73, 0.06, 0, 'y', 14);                                                           // hook post
-  TB.box(acc, 0.06, 0.02, 0.1, 0.71, 0.03, 0, 0.004);
-  TB.cyl(A('aluminumBare'), 0.02, 0.07, 0.68, 0.0, 0.07, 'z', 12);
-  TB.build(tip);
-  const carry = new THREE.Object3D(); carry.position.set(0.7, 0.0, 0);
-  carriage.add(carry);
-
-  // ---- intake roller (flex wheels on a shaft) ----
-  const roller = newGroup(body, h - 0.02, 0.13, 0);
+  // ---- flip-down intake roller (flex wheels on a shaft) ----
   const rwid = id === 'sweeper' ? 0.92 : 0.6;
-  const RB = new Batch();
-  RB.cyl(A('aluminumBare'), 0.015, rwid + 0.05, 0, 0, 0, 'z', 10);
-  const nW = Math.max(3, Math.round(rwid / 0.115));
-  for (let i = 0; i < nW; i++) RB.tire(getMaterial('compliantWheel', id === 'sweeper' ? accentHex : 0x2f3136), 0.05, 0.085, 0, 0, -rwid / 2 + 0.05 + i * ((rwid - 0.1) / (nW - 1)));
-  for (let i = 0; i < nW; i++) RB.cyl(A('aluminumBare'), 0.026, 0.09, 0, 0, -rwid / 2 + 0.05 + i * ((rwid - 0.1) / (nW - 1)), 'z', 14);
-  RB.build(roller);
-  for (const sz of [-1, 1]) S.box(frameM, 0.14, 0.05, 0.02, h - 0.075, 0.13, sz * (rwid / 2 + 0.035), 0.004);       // roller side plates
-  S.box(A('aluminumAnodized'), 0.05, 0.05, rwid + 0.05, h - 0.12, 0.13, 0, 0.005);                                    // roller backing bar
+  const intake = buildIntake(body, { pivotX: 0.12, pivotY: 0.3, len: 0.34, rwid, frameM, wheelColor: id === 'sweeper' ? accentHex : 0x2f3136 });
+  S.box(A('aluminumAnodized'), 0.05, 0.05, rwid + 0.05, 0.1, 0.3, 0, 0.005);                           // frame bar the intake pivots on
 
   // ---- style extras ----
   const wheels = []; let hooks = null;
@@ -435,20 +525,20 @@ export function createRobotModel(robot) {
     }
   }
   if (id === 'climber') {
-    hooks = newGroup(body, mastX + 0.08, 0.2 + tall, 0);
+    hooks = newGroup(body, mastX + 0.08, tallB - 0.05, 0);
     const HB = new Batch();
-    for (const z of [-0.22, 0.22]) {
+    for (const z of [-0.375, 0.375]) {
       HB.box(A('aluminumBare'), 0.045, 0.3, 0.045, 0, 0.15, z, 0.005);
       HB.geo(A('steelZinc'), new THREE.TorusGeometry(0.1, 0.022, 10, 20, Math.PI), 0.1, 0.3, z);
       HB.box(acc, 0.06, 0.05, 0.065, 0, 0.02, z, 0.005);
       HB.cyl(A('steelZinc'), 0.022, 0.05, 0.2, 0.3, z, 'z', 10);
     }
-    HB.box(frameM, 0.04, 0.04, 0.5, 0, 0.0, 0, 0.004);
+    HB.box(frameM, 0.04, 0.04, 0.75, 0, 0.0, 0, 0.004);
     HB.build(hooks);
     // winch drum + brake at the base of the mast
-    S.cyl(A('plastic'), 0.04, 0.3, mastX - 0.12, 0.14, 0, 'z', 18);
-    S.cyl(acc, 0.055, 0.02, mastX - 0.12, 0.14, 0.17, 'z', 18);
-    S.cyl(acc, 0.055, 0.02, mastX - 0.12, 0.14, -0.17, 'z', 18);
+    S.cyl(A('plastic'), 0.04, 0.3, -0.2, 0.14, 0, 'z', 18);
+    S.cyl(acc, 0.055, 0.02, -0.2, 0.14, 0.17, 'z', 18);
+    S.cyl(acc, 0.055, 0.02, -0.2, 0.14, -0.17, 'z', 18);
   }
   if (id === 'stacker') {
     S.box(A('aluminumAnodized'), 0.2, 0.1, 0.3, -0.1, 0.17, 0, 0.008);      // elevator gearbox
@@ -464,36 +554,25 @@ export function createRobotModel(robot) {
   const marker = makeMarker();
   root.add(marker);
 
-  let hCur = TIER_H.stow, eCur = 0, spin = 0, wspin = 0, t = 0;
-  const maxH = id === 'climber' || id === 'stacker' ? 1.8 : 1.0;
-  const markerY = tall + 0.9;
-  const outerTop = baseY + tall;
+  let wspin = 0, t = 0;
+  const markerY = tallB + 0.9;
 
   function update(rs, dt = 0.016, isPlayer = rs.isPlayer) {
     t += dt;
     root.position.set(rs.x, rs.y || 0, rs.z);
     root.rotation.y = -rs.heading;
-    const k = 1 - Math.exp(-dt * 10);
-    const tier = rs.armTier || 'stow';
-    const hT = Math.min(TIER_H[tier] ?? TIER_H.stow, maxH);
-    hCur += (hT - hCur) * k;
-    eCur += ((tier === 'stow' || tier === 'floor' ? 0 : rs.arm) * ROBOT.maxExtension - eCur) * k;
-    carriage.position.y = hCur;
-    const E = Math.max(0, hCur + 0.1 - outerTop);        // how far the elevator tops out above the fixed stage
-    stages[0].position.y = E * 0.5; stages[1].position.y = E;
-    tip.position.x = eCur; carry.position.x = 0.7 + eCur;
-    spin += (rs.intakeOn ? 22 : 0) * dt;
-    roller.rotation.z = -spin;
+    lift.step(rs, dt);
+    intake.update(!!(rs.intakeOn || (rs.action && rs.action.type === 'intake')), !!rs.intakeOn, dt);
     const launching = rs.action && rs.action.type === 'launch';
     wspin += (launching ? 60 : 8) * dt;
     for (const w of wheels) w.rotation.z = wspin;
     if (hooks) {
       const c = rs.action && rs.action.type === 'climb' ? Math.min(1, (rs.action.t || 0) / (rs.action.duration || 1)) : (rs.support >= 2 ? 1 : 0);
-      hooks.position.y = 0.2 + tall - 0.25 + c * 0.25;
+      hooks.position.y = tallB - 0.05 + c * 0.25;
     }
     marker.visible = !!isPlayer;
     if (isPlayer) { marker.position.y = markerY + Math.sin(t * 3) * 0.08; marker.rotation.y = t * 1.5; }
   }
-  update({ ...robot, x: 0, z: 0, heading: 0, armTier: 'stow', arm: 0 }, 1);
-  return { object: root, update, carry, root };
+  update({ ...robot, x: 0, z: 0, heading: 0, armTier: 'stow', arm: 0, action: null }, 1);
+  return { object: root, update, carry: carries[0], carries, lift: lift.state, root };
 }
