@@ -500,7 +500,8 @@ export function createRobotModel(robot) {
     S.box(acc, 0.04, 0.16, 0.9, h - 0.13, 0.32, 0, 0.006);
   }
   if (id === 'tosser') {
-    const sh = newGroup(body, -0.05, 0.42, 0); sh.rotation.z = Math.PI / 5;
+    const sh = newGroup(body, -0.1, 0.9, 0); sh.rotation.z = Math.PI / 6; // sits above the claw arm's travel (arm rides ~0.45-0.6 m)
+    for (const sz of [-1, 1]) S.box(frameM, 0.04, 0.62, 0.04, -0.1, 0.5, sz * 0.2, 0.004);              // shooter towers
     const HB = new Batch();
     for (const sz of [-1, 1]) {
       HB.box(A('polycarbSmoked'), 0.72, 0.3, 0.012, 0.0, 0.0, sz * 0.18, 0.004);
