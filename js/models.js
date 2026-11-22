@@ -322,7 +322,9 @@ function createLift(body, cfg) {
       const Et = drop ? 0.3 * (rs.arm || 0) : 0;
       S.E = slew(S.E, Et, dt, 9, 3.2);
       S.Z = slew(S.Z, 0, dt, 9, 1.5);
-      S.H = slew(S.H, S.E > 0.25 ? S.H : restH, dt, 8, 3.4);       // wait for the claw to clear the peg before lowering
+      const tier = drop ? null : rs.liftTier === 'upper' && (rs.preset?.canUpper ?? true) ? 'upper' : rs.liftTier ? 'lower' : null;
+      const Hset = tier ? (tier === 'upper' ? 2.54 : 0.6096) - (rs.y || 0) - LIFT.PRONG_DY : restH;   // pre-raise to the chosen post height
+      S.H = slew(S.H, S.E > 0.25 ? S.H : Hset, dt, 8, 3.4);       // wait for the claw to clear the peg before lowering
       S.blend = slew(S.blend, 0, dt, 12, 8);
     }
     apply();

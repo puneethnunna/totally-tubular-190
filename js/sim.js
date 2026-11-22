@@ -254,7 +254,7 @@ export function createSim(options = {}) {
   }
 
   // Elevator travel: the lift has to rise from stow to the post height, so upper takes ~1.7 s and lower ~0.9 s.
-  const placeDuration = (r, p) => r.preset.placeTime + TUNE.placeBase + Math.max(0, p.y - (r.y || 0) - 0.45) / TUNE.liftSpeed;
+  const placeDuration = (r, p) => r.preset.placeTime + TUNE.placeBase + (r.liftTier === p.tier ? 0 : Math.max(0, p.y - (r.y || 0) - 0.45) / TUNE.liftSpeed); // pre-raised elevator skips the travel
   function startPlace(r, tier) {
     const k = rt.get(r.id);
     if (!r.held.length) return emit({ type: 'invalid', robotId: r.id, text: 'no tube held' });
@@ -812,6 +812,7 @@ export function createSim(options = {}) {
       const k = rt.get(r.id), raw = disabled ? ZERO : inputs?.[r.id] ?? ZERO;
       const inp = { moveX: num(raw.moveX), moveZ: num(raw.moveZ), rotate: num(raw.rotate), throttle: num(raw.throttle), turn: num(raw.turn) };
       const climbing = r.action?.type === 'climb';
+      r.liftTier = raw.liftTier === 'upper' || raw.liftTier === 'lower' ? raw.liftTier : null;
       if (edges && !disabled && !climbing) {
         const idle = !r.action || r.action.type === 'intake';
         if (idle) {

@@ -1,6 +1,6 @@
 // Boot + game loop glue. `?stubs=1` loads test/stubs/* instead of js/* (or `?stubs=sim,ai` for specific modules).
-import { SIDES, opponent } from './config.js';
-import { createInput, planPlace, armTier } from './input.js';
+import { SIDES, opponent, inRect } from './config.js';
+import { createInput, planPlace } from './input.js';
 import { createUI, loadSettings, saveSettings, ensureMeshes } from './ui.js';
 import { createAutoAlign, ZONE_MSG } from './autoalign.js';
 
@@ -151,8 +151,8 @@ function frame(t) {
       const i = input.poll(q.alliance, q.pi, { cameraMode: game.cam, heading: r?.heading, drive: pr.drive, fieldRelative: settings.fieldRelative, cap: game.cap });
       const ai = q.pi === 1 ? 1 : 0;
       for (const [edge, tier, tag] of [['armUpper', 'upper', 'UPPER'], ['armLower', 'lower', 'LOWER']]) if (i[edge]) {
-        game.armed[ai] = armTier(game.armed[ai], tier);
-        ui.toast(game.armed[ai] ? `Armed: ${tag} — score to place` : 'Tier cleared — score drops on the floor', { tag: tag[0], alliance: q.alliance });
+        if (game.armed[ai] !== tier) ui.toast(`Elevator → ${tag}`, { tag: tag[0], alliance: q.alliance });
+        game.armed[ai] = tier;   // sticks until another tier is chosen or the arm is stowed
       }
       if (i.requestTube && match.phase !== 'auto') { if (sim.requestHumanTube?.(q.alliance) === false) ui.toast('Human player not available', { alliance: q.alliance }); }
       if (i.drop) i.scoreFloor = true;
@@ -163,15 +163,19 @@ function frame(t) {
       if (i.place && r) {
         const armed = game.armed[ai];
         if (aa.active) { aa.cancel(); ui.toast('Auto-align cancelled', { tag: '!', alliance: q.alliance }); }
-        else if (!armed) { // nothing armed: floor drop in place (no auto-align)
-          if (r.held.length) { i.scoreFloor = true; game.armed[ai] = null; } else ui.toast('No tube held', { tag: '!', alliance: q.alliance });
-        } else if (settings.autoAlign !== false) {
-          const res = aa.start(sim, q.id, armed);
-          if (res.ok) { justStarted = true; game.armed[ai] = null; ui.toast(`Auto-align → ${res.target}`, { tag: '⌖', alliance: q.alliance }); }
-          else ui.toast(res.reason, { tag: '!', alliance: q.alliance });
-        } else {
+        else if (!r.held.length) ui.toast('No tube held', { tag: '!', alliance: q.alliance });
+        else if (!armed) i.scoreFloor = true;   // nothing armed: floor drop in place
+        else {
+          // Armed: a post already in reach places directly; inside the own scoring zone auto-align to the nearest post;
+          // anywhere else (or if auto-align can't start) the tube is shot out from the raised elevator.
           const plan = planPlace({ robot: r, preset: pr, armed, posts: SIDES[q.alliance].posts, tune: sim.tune });
-          if (plan.act) { i[plan.act] = true; game.armed[ai] = null; } else ui.toast(plan.why, { tag: '!', alliance: q.alliance });
+          const inZone = inRect(SIDES[r.alliance].scoringZone, r.x, r.z);
+          if (plan.act && plan.act !== 'scoreFloor') i[plan.act] = true;
+          else if (inZone && settings.autoAlign !== false) {
+            const res = aa.start(sim, q.id, armed);
+            if (res.ok) { justStarted = true; ui.toast(`Auto-align → ${res.target}`, { tag: '⌖', alliance: q.alliance }); }
+            else { i.scoreFloor = true; ui.toast(`${res.reason} — tube shot out`, { tag: '!', alliance: q.alliance }); }
+          } else i.scoreFloor = true;
         }
       }
       if (aa.active && !i.place) {
@@ -183,7 +187,8 @@ function frame(t) {
         const out = aa.step(sim, 0, null); if (out) Object.assign(i, { moveX: 0, moveZ: 0, rotate: 0, throttle: 0, turn: 0 }, out);
       }
       if (game.carry[q.id]) { for (const k of ACT_EDGES) if (game.carry[q.id][k]) i[k] = true; game.carry[q.id] = null; } // an edge from a frame that ran no sim step
-      if (i.stow) { game.stow[q.id] = t + 450; ui.toast('Arm stowed', { tag: 'E', alliance: q.alliance }); }
+      if (i.stow) { game.stow[q.id] = t + 450; game.armed[ai] = null; ui.toast('Arm stowed', { tag: 'E', alliance: q.alliance }); }
+      i.liftTier = game.armed[ai];   // elevator holds the chosen height (sim.js -> models.js)
       if (t < (game.stow[q.id] || 0)) i.intake = false;
       frameIn[q.id] = i;
     }

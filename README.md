@@ -48,10 +48,11 @@ Everything here is our own code, built for our own game. It isn't affiliated wit
 | Drive / strafe | W A S D | Left stick |
 | Turn | J / L | Right stick |
 | Intake | Shift or F | LT |
-| Arm UPPER tier | Z | Y |
-| Arm LOWER tier | X | B |
-| Score (auto-align to the armed tier; floor drop if nothing armed) | Space or H | RT |
+| Raise elevator to UPPER (stays until changed) | Z | Y |
+| Raise elevator to LOWER (stays until changed) | X | B |
+| Score: places if a post is in reach, auto-aligns inside your scoring zone, otherwise shoots the tube out; floor drop if no tier chosen | Space or H | RT |
 | Drop tube | Q | LB |
+| Stow elevator (clears the tier) | E | X |
 | Climb | G | RB |
 | Request human-player tube | T | D-pad down |
 | Change camera | C | L3 |
