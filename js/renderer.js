@@ -82,7 +82,7 @@ export function createRenderer(canvas) {
     flat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2),
     tmp: new THREE.Quaternion(), tmp2: new THREE.Quaternion(),
   };
-  const Y = new THREE.Vector3(0, 1, 0), v3 = new THREE.Vector3(), ONE = new THREE.Vector3(1, 1, 1), ZERO3 = new THREE.Vector3(1e-4, 1e-4, 1e-4), m4 = new THREE.Matrix4();
+  const Y = new THREE.Vector3(0, 1, 0), XAX = new THREE.Vector3(1, 0, 0), v3 = new THREE.Vector3(), ONE = new THREE.Vector3(1, 1, 1), ZERO3 = new THREE.Vector3(1e-4, 1e-4, 1e-4), m4 = new THREE.Matrix4();
 
   function setCameraMode(m, a = alliance, robotId = null, opts = {}) {
     if (m === 'chase') m = 'third';
@@ -237,9 +237,8 @@ export function createRenderer(canvas) {
         }
         yaw = Math.PI / 2;
       } else if (tb.state === 'chute') {   // tips from upright (tilt 1) to flat (tilt 0) as it settles
-        const k = tb.tilt || 0;
-        Q.tmp2.setFromAxisAngle(Y, tb.yaw || 0);
-        Q.tmp.copy(Q.flat).slerp(Q.tmp2, k);
+        const k = tb.tilt || 0;   // pure tip about the ring's horizontal axis, matching the sim's contact height
+        Q.tmp.setFromAxisAngle(Y, tb.yaw || 0).multiply(Q.tmp2.setFromAxisAngle(XAX, -(Math.PI / 2) * (1 - k)));
       }
       else if (tb.state === 'flight') {
         AX.set(-tb.vz, 0, tb.vx);
@@ -300,5 +299,5 @@ export function createRenderer(canvas) {
 
   setQuality('high');
   resize();
-  return { scene, camera, gl, canvas, field, setCameraMode, setOptions, render, resize, setQuality, get quality() { return quality; }, get mode() { return mode; } };
+  return { scene, camera, gl, canvas, field, setCameraMode, setOptions, render, resize, setQuality, get quality() { return quality; }, get mode() { return mode; }, get models() { return models; } };
 }

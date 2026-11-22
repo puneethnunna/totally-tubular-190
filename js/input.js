@@ -197,9 +197,15 @@ export function createInput() {
     if (codeSet().has(c)) e.preventDefault();
     if (!e.repeat) edge.add(c);
     down.add(c);
+    syncMods(e);
   });
-  addEventListener('keyup', (e) => down.delete(normCode(e.code)));
+  addEventListener('keyup', (e) => { down.delete(normCode(e.code)); syncMods(e); });
   addEventListener('blur', clear);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clear(); });
+  // A missed keyup (focus change, OS shortcut) must not leave a key "held" forever: trust the event's modifier flags.
+  const MODS = { ShiftLeft: 'shiftKey', ControlLeft: 'ctrlKey', ControlRight: 'ctrlKey', AltLeft: 'altKey', AltRight: 'altKey', MetaLeft: 'metaKey', MetaRight: 'metaKey' };
+  function syncMods(e) { for (const c in MODS) if (down.has(c) && !e[MODS[c]]) down.delete(c); }
+  addEventListener('pointerdown', syncMods); addEventListener('pointermove', syncMods);
 
   const held = (id, pi) => keys(id, pi).some((c) => down.has(c));
   const tap = (id, pi) => { let r = false; for (const c of keys(id, pi)) if (edge.delete(c)) r = true; return r; };

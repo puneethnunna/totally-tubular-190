@@ -18,7 +18,7 @@ const TUNE = {
   reach: 0.6, liftSpeed: 2.2, placeBase: 0.15, placeAngle: (35 * Math.PI) / 180, placeLateral: 0.3,
   launchAngle: (20 * Math.PI) / 180, launchMin: 1.5, launchMax: 5, throwDist: 4,
   intakeNear: 0.3, intakeFar: 1.1, intakeHalf: 0.55, intakeHalfWide: 0.8,
-  feedCooldown: 1.5, manualCooldown: 0.8, chuteSpeed: 1.6, chuteTime: 2.0, chuteExitY: 0.5, chuteStagger: 1.2, feedClear: 1.0,
+  feedCooldown: 1.5, manualCooldown: 0.8, chuteSpeed: 1.6, chuteTime: 2.0, chuteExitY: 0.7, chuteStagger: 1.2, feedClear: 1.0,
   releaseAt: 0.7, doubleExtra: 0.5, climbTouch: 0.2, climbAngle: (60 * Math.PI) / 180,
 };
 
@@ -728,17 +728,32 @@ export function createSim(options = {}) {
       } else if (t.state === 'floor' || t.state === 'chute') {
         t.x += t.vx * dt; t.z += t.vz * dt;
         if (t.state === 'chute') {
-          // Inflatable tube out of the chute: drops from the exit, bounces a little, tips over and settles flat.
+          // Inflatable tube out of the chute (rigid-ring model). tilt = 1 upright .. 0 flat; the lowest point of a ring tipped
+          // to angle phi is Rc*sin(phi) + r, so it always rests on its edge and never dips into the carpet.
+          const Rc = TUBE.outerRadius - TR, HP = Math.PI / 2;
+          let phi = (t.tilt || 0) * HP;
           t.vy = (t.vy || 0) - 9.81 * dt; t.y += t.vy * dt; t.chuteT -= dt;
-          const gy = TR + (t.tilt || 0) * (TUBE.outerRadius - TR);         // an upright ring rests on its rim
-          const grounded = t.y <= gy + 1e-4;
+          const gy = () => Rc * Math.sin(phi) + TR;
+          let grounded = t.y <= gy() + 1e-4;
           if (grounded) {
-            t.y = gy;
-            if (t.vy < -0.7) { t.vy *= -0.35; t.vx *= 0.8; t.vz *= 0.8; } else t.vy = 0;
-            t.tilt = Math.max(0, (t.tilt || 0) - dt / 0.35);                 // falls over onto its side
-            const sp = Math.hypot(t.vx, t.vz); if (sp > 0) { const f = Math.max(0, 1 - 2.2 * dt); t.vx *= f; t.vz *= f; }
+            t.y = gy();
+            if (t.vy < -0.5) { t.vy *= -0.45; t.vx *= 0.85; t.vz *= 0.85; t.tiltW = (t.tiltW || 0) - 0.9; }   // edge hits, bounces, starts to tip
+            else t.vy = Math.max(0, t.vy);
+            const sp = Math.hypot(t.vx, t.vz); if (sp > 0) { const f = Math.max(0, 1 - 1.6 * dt); t.vx *= f; t.vz *= f; }
           }
-          if ((grounded && t.vy === 0 && t.tilt <= 0) || t.chuteT <= 0) { t.state = 'floor'; t.tilt = 0; t.vy = 0; t.y = TR; }
+          if (phi > 0 && (grounded || (t.tiltW || 0) < 0)) {             // topples: gravity torque about the contact edge
+            t.tiltW = (t.tiltW || 0) - (9.81 / Rc) * Math.cos(phi) * 0.6 * dt - (phi > HP - 0.02 ? 0.4 * dt : 0);
+            phi += t.tiltW * dt;
+            if (phi <= 0) phi = 0;
+            if (grounded) { t.y = Rc * Math.sin(phi) + TR; t.vy = Rc * Math.cos(phi) * t.tiltW; } // centre rides down with the contact edge
+            else t.y = Math.max(t.y, Rc * Math.sin(phi) + TR);
+            if (phi <= 0) {                                             // slaps down flat: a small hop, then rests
+              t.vy = Math.min(0.6, 0.3 * Math.abs(t.vy)); t.tiltW = 0;
+            }
+          }
+          t.tilt = phi / HP;
+          grounded = t.y <= Rc * Math.sin(phi) + TR + 1e-4;
+          if ((grounded && phi <= 0 && Math.abs(t.vy) < 0.05) || t.chuteT <= 0) { t.state = 'floor'; t.tilt = 0; t.tiltW = 0; t.vy = 0; t.y = TR; }
         } else {
           t.y = TR;
           const sp = Math.hypot(t.vx, t.vz);

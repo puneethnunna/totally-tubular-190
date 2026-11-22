@@ -453,3 +453,13 @@ console.log('sim tests passed');
   assert.ok(feeds.blue.length >= 3, 'human player keeps feeding');
   console.log('chute ok', feeds.blue.length, 'feeds');
 }
+
+// ---------- intake always drops the elevator ----------
+{
+  const s = createSim({ robots: [{ id: 'blue-0', alliance: 'blue', slot: 0, number: '1', preset: 'stacker' }], midfield: { blue: 0, red: 0 } });
+  s.step(1 / 120, { 'blue-0': { liftTier: 'upper' } }, 'teleop');
+  assert.equal(s.state.robots[0].liftTier, 'upper', 'tier held');
+  s.step(1 / 120, { 'blue-0': { liftTier: 'upper', intake: true } }, 'teleop');
+  assert.equal(s.state.robots[0].liftTier, null, 'intake forces the lift down even if a tier is still requested');
+  console.log('intake lowers lift ok');
+}

@@ -245,4 +245,4 @@ function frame(t) {
 
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
 requestAnimationFrame(frame);
-window.__tt = { get game() { return game; }, M, ui, input, startGame, settings };
+window.__tt = { get game() { return game; }, M, ui, input, startGame, settings, get renderer() { return renderer; } };
