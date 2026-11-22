@@ -4,7 +4,7 @@
 
 <img src="assets/frc190-logo.jpg" alt="FRC Team 190 logo" width="120" align="right">
 
-Built by **FRC Team 190, Gompei and the H.E.R.D.** (Mass Academy & WPI).
+Built by **Claude and Puneeth Nunna from FRC Team 190, Gompei and the H.E.R.D.** (Mass Academy & WPI).
 
 A browser-based FRC robot simulator for **TOTALLY TUBULAR**, Team 190's mock game for the 2026 off-season. Drive a robot on a field built from our Onshape CAD, pick up tubes, hang them on your alliance's posts, and climb the platforms in the endgame. You can play alone or against CPU robots. There are no accounts and nothing to install.
 
