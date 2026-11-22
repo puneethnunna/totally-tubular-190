@@ -21,7 +21,7 @@ const input = createInput();
 const sounds = createSounds();
 const syncVolume = () => sounds.setVolume(settings.muted ? 0 : (settings.volume ?? 70) / 100);
 syncVolume();
-for (const ev of ['pointerdown', 'keydown', 'touchstart', 'gamepadconnected']) window.addEventListener(ev, () => sounds.unlock(), { once: false, passive: true });
+for (const ev of ['pointerdown', 'keydown', 'touchstart', 'gamepadconnected']) window.addEventListener(ev, () => { if (sounds.unlock()) sounds.preload?.(); }, { once: false, passive: true });
 input.configure(settings);
 let renderer = null, game = null, lastCfg = null, paused = false, lastT = performance.now(), hudT = 0, score = null, scoreT = 0;
 const CAMS = ['driver', 'third', 'first'];
@@ -193,7 +193,7 @@ function frame(t) {
       if (aa.active && (!r || !live)) aa.cancel('');
       if (i.place && r) {
         const armed = game.armed[ai];
-        if (aa.active) { aa.cancel(); ui.toast('Auto-align cancelled', { tag: '!', alliance: q.alliance }); }
+        if (aa.active) { /* already aligning: a second press doesn't cancel it */ }
         else if (!r.held.length) ui.toast('No tube held', { tag: '!', alliance: q.alliance });
         else if (!armed) i.scoreFloor = true;   // nothing armed: floor drop in place
         else {

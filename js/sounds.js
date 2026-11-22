@@ -102,13 +102,34 @@ export function createSounds() {
   }
   function setV(v, freq, gain, t) { v.o.frequency.setTargetAtTime(freq, t, 0.05); v.g.gain.setTargetAtTime(gain, t, 0.06); }
 
+  // Real sound files override the synthesized cues when present: assets/sounds/<name>.(mp3|ogg|wav)
+  // names: autoStart, autoEnd, teleopStart, endgame, matchEnd, thud, clack, grab. Missing files fall back silently.
+  const files = {};
+  async function loadFile(name) {
+    if (name in files) return files[name];
+    files[name] = null;
+    for (const ext of ['mp3', 'ogg', 'wav']) {
+      try {
+        const res = await fetch(new URL(`../assets/sounds/${name}.${ext}`, import.meta.url));
+        if (!res.ok) continue;
+        files[name] = await ctx.decodeAudioData(await res.arrayBuffer());
+        return files[name];
+      } catch (e) { /* try next */ }
+    }
+    return null;
+  }
+  function playFile(buf, t) { const s = ctx.createBufferSource(), g = ctx.createGain(); s.buffer = buf; g.gain.value = 1.0; s.connect(g); g.connect(master); s.start(t); }
+
   return {
+    preload() { try { if (ensure()) for (const n of ['autoStart', 'autoEnd', 'teleopStart', 'endgame', 'matchEnd']) loadFile(n); } catch (e) { /* ignore */ } },
     play(name) {
       try {
         const fn = SOUNDS[name];
         if (!fn || volume <= 0 || !ensure()) return false;
         if (ctx.state === 'suspended') ctx.resume?.();
-        fn(ctx.currentTime + 0.03);
+        const t0 = ctx.currentTime + 0.03, real = files[name];
+        if (real) playFile(real, t0); else fn(t0);
+        if (!(name in files)) loadFile(name);   // fetch a real file for next time if one exists
         return true;
       } catch (e) { return false; }
     },
@@ -116,11 +137,14 @@ export function createSounds() {
     robot({ speed = 0, turn = 0, intake = false, lift = 0 } = {}) {
       try {
         if (volume <= 0 || !unlocked || !ensure()) return;
-        if (!voices) voices = { a: voice('sawtooth', 900), b: voice('sawtooth', 700), roll: voice('square', 500), lift: voice('triangle', 800) };
+        if (!voices) voices = { a: voice('sawtooth', 900), b: voice('sawtooth', 700), roll: voice('sawtooth', 1400), roll2: voice('sawtooth', 2200), lift: voice('triangle', 800) };
         const t = ctx.currentTime, m = Math.min(1, Math.max(speed, turn * 0.7));
         setV(voices.a, 90 + 620 * m, 0.035 * Math.min(1, m * 1.6), t);
         setV(voices.b, 92.5 + 640 * m, 0.025 * Math.min(1, m * 1.6), t);
-        setV(voices.roll, 140, intake ? 0.03 : 0, t);
+        // intake roller motor: a brushless whine that spins up/down (two detuned saws), not a buzz
+        const spin = intake ? 1 : 0, wob = 1 + 0.01 * Math.sin(t * 23);
+        setV(voices.roll, (230 + 160 * spin) * wob, intake ? 0.026 : 0, t);
+        setV(voices.roll2, (462 + 330 * spin) * wob, intake ? 0.012 : 0, t);
         setV(voices.lift, 210 + 260 * lift, lift > 0.05 ? 0.035 * Math.min(1, lift * 2) : 0, t);
       } catch (e) { /* audio is optional */ }
     },

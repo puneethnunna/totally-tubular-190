@@ -90,14 +90,16 @@ t('refuses outside the scoring zone / without a tube / unsupported tier', () => 
   const red = setup('stacker', 'red', 6, 0, 0); assert.equal(createAutoAlign().start(red, 'me', 'auto').reason, ZONE_MSG); // blue's zone is not red's
   assert.ok(SIDES.blue.scoringZone.x0 > 0);
 });
-t('manual input or pressing Place again cancels', () => {
+t('only a deliberate, held drive input cancels (drift, early input and a second press do not)', () => {
   let sim = setup('stacker', 'blue', 6.0, -2.8, Math.PI), aa = createAutoAlign(); aa.start(sim, 'me', 'auto');
   let out = aa.step(sim, DT, { moveX: 0.05 }); assert.ok(out && aa.active, 'small drift does not cancel');
-  out = aa.step(sim, DT, { rotate: 0.6 }); assert.equal(out, null); assert.equal(aa.active, false); assert.equal(aa.result.reason, 'Auto-align cancelled');
+  for (let i = 0; i < 30; i++) aa.step(sim, DT, { rotate: 1 }); assert.ok(aa.active, 'input in the first 0.5 s is ignored');
+  for (let i = 0; i < 60; i++) aa.step(sim, DT, { moveX: 0.4 }); assert.ok(aa.active, 'moderate input does not cancel');
+  assert.ok(aa.step(sim, DT, { place: true }) && aa.active, 'pressing Place again does not cancel');
+  for (let i = 0; i < 50 && aa.active; i++) out = aa.step(sim, DT, { rotate: 0.9 });
+  assert.equal(aa.active, false); assert.equal(aa.result.reason, 'Auto-align cancelled');
   sim = setup('tosser', 'blue', 6.0, -2.8, Math.PI); aa = createAutoAlign(); aa.start(sim, 'me', 'lower');
-  assert.equal(aa.step(sim, DT, { throttle: -1 }), null); assert.equal(aa.active, false);
-  sim = setup('stacker', 'blue', 6.0, -2.8, Math.PI); aa = createAutoAlign(); aa.start(sim, 'me', 'auto');
-  assert.equal(aa.step(sim, DT, { place: true }), null);
+  for (let i = 0; i < 120 && aa.active; i++) aa.step(sim, DT, { throttle: -1 }); assert.equal(aa.active, false);
   aa.start(sim, 'me', 'auto'); aa.cancel(); assert.equal(aa.active, false);
   const { result } = run(sim, aa, 1); assert.ok(sim.robotById('me').held.length === 1 && postTubes(sim, 'upper', 'blue') === 0, 'nothing placed after cancel');
 });

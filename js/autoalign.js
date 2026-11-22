@@ -17,7 +17,9 @@ export const AA = {
   gapTol: 0.15,        // along-axis stand-off tolerance, m
   speedTol: 0.25,      // m/s: must be (nearly) stopped to fire
   stuckTime: 1.5,      // s of "commanding motion but not moving" before picking another post / aborting
-  cancelThreshold: 0.2, // manual stick / key magnitude that overrides auto-align
+  cancelThreshold: 0.6, // manual stick / key magnitude that overrides auto-align...
+  cancelHold: 0.3,      // ...only when held that long (stick drift / still-held keys don't cancel)
+  cancelGrace: 0.5,     // s after starting during which manual input is ignored (driver letting go of the sticks)
   retries: 2,          // sim rejected the edge (e.g. lost frame) -> try again this many times
 };
 export const ZONE_MSG = 'Auto-align only works in your scoring zone';
@@ -137,7 +139,8 @@ export function createAutoAlign() {
     st.t += dt; api.updateProgress(sim);
     if (manual) {
       const m = Math.max(Math.abs(manual.moveX || 0), Math.abs(manual.moveZ || 0), Math.abs(manual.rotate || 0), Math.abs(manual.throttle || 0), Math.abs(manual.turn || 0));
-      if (manual.place || m > AA.cancelThreshold) return finish(false, 'Auto-align cancelled');
+      st.over = st.t > AA.cancelGrace && m > AA.cancelThreshold ? (st.over || 0) + dt : 0;
+      if (st.over >= AA.cancelHold) return finish(false, 'Auto-align cancelled');
     }
     if (st.phase === 'acting') {
       const a = r.action?.type;
