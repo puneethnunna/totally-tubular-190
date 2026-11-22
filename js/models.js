@@ -331,14 +331,37 @@ function createLift(body, cfg) {
   return { carries, step, state: S, root, mast, carriage, L, top: baseY + L };
 }
 
-// Flip-down intake: arms pivot about a frame bar, roller spins on the end. deploy 0 = raised/stowed, 1 = on the floor.
+// Over-the-bumper intake. The pivot bar sits INSIDE the frame perimeter above the bumper top; two bent arms (pivot -> elbow -> roller)
+// stay attached to it at all times. Deployed (deploy 1): the first segment slopes down over the bumper's top-front edge with ~4 cm to
+// spare, the second drops in front of the bumper face so the roller touches the carpet and scoops. Stowed (deploy 0): the whole arm
+// rotates back/up about the pivot and folds over the robot inside the frame. frontX = outer bumper face x.
+// All points are relative to the bumper face: P pivot (-0.22, 0.40), E elbow (+0.02, 0.22), R roller axle (+0.14, 0.05 = tire radius).
+const INTAKE = { px: -0.22, py: 0.40, ex: 0.02, ey: 0.22, rx: 0.14, ry: 0.05, stowDeg: 195 };
 function buildIntake(body, o) {
-  const { pivotX, pivotY, len, rwid, frameM, wheelColor, lazy } = o;
+  const { frontX, rwid, frameM, wheelColor, lazy } = o;
+  const pivotX = frontX + INTAKE.px, pivotY = INTAKE.py;
+  const E = [INTAKE.ex - INTAKE.px, INTAKE.ey - INTAKE.py], R = [INTAKE.rx - INTAKE.px, INTAKE.ry - INTAKE.py];   // relative to the pivot
+  const mount = newGroup(body, pivotX, 0, 0), MB = new Batch();
   const pivot = newGroup(body, pivotX, pivotY, 0), AB = new Batch();
-  for (const sz of [-1, 1]) AB.box(frameM, len + 0.03, 0.035, 0.02, len / 2, 0, sz * (rwid / 2 + 0.035), 0.004);
-  AB.box(A('aluminumAnodized'), 0.045, 0.05, rwid + 0.1, 0, 0, 0, 0.005);
+  const az = rwid / 2 + 0.035;                                                  // arm z
+  const post = Math.min(az - 0.02, 0.38);
+  for (const sz of [-1, 1]) {                                                   // uprights from the deck to the pivot bar
+    MB.box(frameM, 0.04, pivotY - 0.09, 0.03, 0, (pivotY + 0.09) / 2, sz * post, 0.004);
+    MB.box(frameM, 0.07, 0.04, 0.04, 0, 0.1, sz * post, 0.004);
+  }
+  MB.build(mount);
+  const seg = (x0, y0, x1, y1, z) => {
+    const L = Math.hypot(x1 - x0, y1 - y0), ang = Math.atan2(y1 - y0, x1 - x0);
+    AB.box(frameM, L + 0.03, 0.035, 0.02, (x0 + x1) / 2, (y0 + y1) / 2, z, 0.004, 0, 0, ang);
+  };
+  for (const sz of [-1, 1]) {
+    seg(0, 0, E[0], E[1], sz * az);
+    seg(E[0], E[1], R[0], R[1], sz * az);
+    AB.cyl(A('aluminumBare'), 0.018, 0.045, E[0], E[1], sz * az, 'z', 12);       // elbow hinge
+  }
+  AB.cyl(A('aluminumBare'), 0.025, rwid + 0.1, 0, 0, 0, 'z', 14);                // pivot shaft
   AB.build(pivot);
-  const roller = newGroup(pivot, len, 0, 0), RB = new Batch();
+  const roller = newGroup(pivot, R[0], R[1], 0), RB = new Batch();
   RB.cyl(A('aluminumBare'), 0.015, rwid + 0.05, 0, 0, 0, 'z', 10);
   const nW = Math.max(3, Math.round(rwid / 0.115));
   for (let i = 0; i < nW; i++) {
@@ -347,14 +370,14 @@ function buildIntake(body, o) {
     RB.cyl(A('aluminumBare'), 0.026, 0.09, 0, 0, zz, 'z', 14);
   }
   RB.build(roller);
-  const A0 = -0.14, A1 = -0.70;
+  const STOW = (INTAKE.stowDeg - Math.atan2(R[1], R[0]) * 180 / Math.PI) * Math.PI / 180;   // rotation (about +z, forward end swings up/back)
   let dep = 0, spin = 0;
   function update(on, rolling, dt) {
     dep += ((on ? 1 : 0) - dep) * (1 - Math.exp(-dt * 12));
     spin += (rolling ? 22 : 0) * dt;
-    pivot.rotation.z = A0 + (A1 - A0) * dep;
-    roller.rotation.z = -spin;
-    if (lazy) pivot.visible = dep > 0.03;
+    pivot.rotation.z = STOW * (1 - dep);
+    roller.rotation.z = -spin - pivot.rotation.z;                               // spin about its own axle regardless of arm angle
+    if (lazy) pivot.visible = mount.visible = dep > 0.03;
   }
   update(false, false, 1);
   return { pivot, roller, update };
@@ -393,7 +416,7 @@ function createMeshModel(robot, geo) {
     mastX: -fp.x / 2 + 0.05, zr: canUp ? 0.14 : 0.2, tall: canUp ? 0.95 : 0.7, n: canUp ? 3 : 2, frameM: getMaterial('aluminumAnodized'),
     acc: getMaterial('powderCoat', model.accent ?? FINISH_DEFAULT_TEAM), xA0: frontX - 0.04, yA0: 0.6, lazy: true,
   });
-  const intake = buildIntake(body, { pivotX: frontX - 0.3, pivotY: 0.3, len: 0.34, rwid: Math.max(0.3, fp.z * 0.7), frameM: getMaterial('aluminumAnodized'), wheelColor: 0x2f3136, lazy: true });
+  const intake = buildIntake(body, { frontX, rwid: Math.max(0.3, fp.z * 0.7), frameM: getMaterial('aluminumAnodized'), wheelColor: 0x2f3136, lazy: true });
   const marker = makeMarker(); root.add(marker);
   const top = (ud.height || model.height || 0.8) + 0.6;
   let t = 0;
@@ -484,20 +507,19 @@ export function createRobotModel(robot) {
   const tallB = lift.top;
 
   // ---- flip-down intake roller (flex wheels on a shaft) ----
-  const rwid = id === 'sweeper' ? 0.92 : 0.6;
-  const intake = buildIntake(body, { pivotX: 0.12, pivotY: 0.3, len: 0.34, rwid, frameM, wheelColor: id === 'sweeper' ? accentHex : 0x2f3136 });
-  S.box(A('aluminumAnodized'), 0.05, 0.05, rwid + 0.05, 0.1, 0.3, 0, 0.005);                           // frame bar the intake pivots on
+  const rwid = id === 'sweeper' ? 0.86 : 0.6;
+  const intake = buildIntake(body, { frontX: h + b, rwid, frameM, wheelColor: id === 'sweeper' ? accentHex : 0x2f3136 });
 
   // ---- style extras ----
   const wheels = []; let hooks = null;
   if (id === 'sweeper') {
-    S.box(frameM, 0.1, 0.2, 1.0, h - 0.09, 0.24, 0, 0.008);
-    S.box(A('polycarbSmoked'), 0.2, 0.006, 0.96, h - 0.08, 0.36, 0, 0.001, 0, 0, -0.35);
+    S.box(frameM, 0.1, 0.2, 1.0, h - 0.30, 0.24, 0, 0.008);
+    S.box(A('polycarbSmoked'), 0.2, 0.006, 0.96, h - 0.29, 0.36, 0, 0.001, 0, 0, -0.35);
     for (const sz of [-1, 1]) {
-      S.box(A('aluminumSatin'), 0.3, 0.06, 0.04, h - 0.2, 0.17, sz * 0.46, 0.006);
-      S.box(acc, 0.12, 0.1, 0.03, h - 0.12, 0.2, sz * 0.5, 0.005);
+      S.box(A('aluminumSatin'), 0.3, 0.06, 0.04, h - 0.3, 0.17, sz * 0.46, 0.006);
+      S.box(acc, 0.12, 0.1, 0.03, h - 0.24, 0.2, sz * 0.5, 0.005);
     }
-    S.box(acc, 0.04, 0.16, 0.9, h - 0.13, 0.32, 0, 0.006);
+    S.box(acc, 0.04, 0.16, 0.9, h - 0.25, 0.32, 0, 0.006);
   }
   if (id === 'tosser') {
     const sh = newGroup(body, -0.1, 0.9, 0); sh.rotation.z = Math.PI / 6; // sits above the claw arm's travel (arm rides ~0.45-0.6 m)

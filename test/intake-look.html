@@ -1,0 +1,47 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Intake side view</title>
+<style>body{margin:0;background:#0b0d11;color:#eae8e3;font:13px system-ui}.r{display:flex;flex-wrap:wrap;gap:6px;padding:6px}.r div{position:relative}.r b{position:absolute;left:6px;top:4px}img{display:block;background:#2a2d34}</style>
+<script type="importmap">{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}</script></head><body><div class="r" id="g"></div>
+<script type="module">
+// Side view (robot faces right) of each robot with intake at deploy frames. Hash: #r=11046,11414&f=0,3,6,10,60&view=side|iso
+import { ROSTER } from '../js/robots.js';
+import { ensureMeshes } from '../js/robots.js';
+import { createRobotModel } from '../js/models.js';
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+const q = new URLSearchParams(location.hash.slice(1));
+const ids = (q.get('r') || '11046,11414,11114,13310').split(',');
+const frames = (q.get('f') || '0,2,4,7,60').split(',').map(Number);
+const view = q.get('view') || 'side';
+const W = 330, H = 260;
+const rd = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); rd.setPixelRatio(1); rd.setSize(W, H);
+const sc = new THREE.Scene(); sc.background = new THREE.Color(0x2a2d34);
+sc.environment = new THREE.PMREMGenerator(rd).fromScene(new RoomEnvironment(), 0.04).texture;
+sc.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.1));
+const d = new THREE.DirectionalLight(0xffffff, 1.5); d.position.set(1, 4, 6); sc.add(d);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshBasicMaterial({ color: 0x555a66 })); floor.rotation.x = -Math.PI / 2; floor.position.y = -0.002; sc.add(floor);
+const cam = view === 'side' ? new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 20) : new THREE.PerspectiveCamera(30, W / H, 0.1, 30);
+if (view === 'side') { cam.position.set(0.25, 0.58, 8); cam.lookAt(0.25, 0.58, 0); cam.left = -0.8; cam.right = 0.8; cam.top = 0.63; cam.bottom = -0.63; cam.updateProjectionMatrix(); }
+else { cam.position.set(2.6, 1.6, 2.4); cam.lookAt(0.2, 0.3, 0); }
+const g = document.getElementById('g');
+for (const id of ids) {
+  const def = ROSTER.find((r) => r.number === id); await ensureMeshes([def]);
+  const rs = { id: 'p', alliance: 'blue', number: id, preset: def.preset, x: 0, y: 0, z: 0, heading: 0, armTier: 'stow', arm: 0, support: 0, held: [], isPlayer: false, intakeOn: false, action: null };
+  const m = createRobotModel(rs); sc.add(m.object);
+  let n = 0;
+  const sorted = [...frames];
+  rs.intakeOn = false; m.update(rs, 1);
+  for (const f of sorted) {
+    rs.intakeOn = f > 0;
+    while (n < f) { m.update(rs, 1 / 60); n++; }
+    if (f === 0) { m.update(rs, 1 / 60); }
+    rd.render(sc, cam);
+    const im = new Image(); im.src = rd.domElement.toDataURL(); const w = document.createElement('div'); w.innerHTML = '<b>' + id + ' f' + f + '</b>'; w.appendChild(im); g.appendChild(w);
+  }
+  sc.remove(m.object);
+}
+document.title = 'done';
+</script></body></html>
