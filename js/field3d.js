@@ -249,7 +249,11 @@ function creasedGeometry(pos, idx, creaseDeg = 30) {
 }
 
 export async function loadFieldModel(url = FIELD_URL) {
-  const buf = await (await fetch(url)).arrayBuffer();
+  const get = async (u) => { const r = await fetch(u).catch(() => null); return r && r.ok ? r.arrayBuffer() : null; };
+  const good = (b) => b && b.byteLength > 8 && new DataView(b).getUint32(0, true) === 0x31465454;
+  let buf = await get(url);
+  if (!good(buf) && url === FIELD_URL) buf = await get(new URL('../assets/field.wasm', import.meta.url)); // same bytes, for hosts that won't serve .bin
+  if (!buf) throw new Error('field model not found');
   const dv = new DataView(buf);
   if (dv.getUint32(0, true) !== 0x31465454) throw new Error('field.bin: bad magic');   // 'TTF1'
   const hlen = dv.getUint32(4, true);
