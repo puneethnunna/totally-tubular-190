@@ -6,14 +6,14 @@
   "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
 }}</script></head><body><div class="r" id="g"></div>
 <script type="module">
-// Side view (robot faces right) of each robot with intake at deploy frames. Hash: #r=11046,11414&f=0,3,6,10,60&view=side|iso
+// Side view (robot faces right) of each robot with intake at deploy frames. Hash: #r=1046,1414&f=0,3,6,10,60&view=side|iso
 import { ROSTER } from '../js/robots.js';
 import { ensureMeshes } from '../js/robots.js';
 import { createRobotModel } from '../js/models.js';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 const q = new URLSearchParams(location.hash.slice(1));
-const ids = (q.get('r') || '11046,11414,11114,13310').split(',');
+const ids = (q.get('r') || '1046,1414,1114,3310').split(',');
 const frames = (q.get('f') || '0,2,4,7,60').split(',').map(Number);
 const view = q.get('view') || 'side';
 const W = 330, H = 260;

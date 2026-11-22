@@ -11,7 +11,7 @@ import { geometryFromData } from '../js/stlImport.js';
 import * as THREE from 'three';
 import { createRobotPreview } from '../js/preview3d.js';
 const q = new URLSearchParams(location.hash.slice(1));
-const ids = (q.get('r') || '11046,11414,11114,13310').split(',');
+const ids = (q.get('r') || '1046,1414,1114,3310').split(',');
 const g = document.getElementById('g');
 // synthetic "STL": a cylinder-ish body + box, to check creased normals
 function fakeStl(finish) {

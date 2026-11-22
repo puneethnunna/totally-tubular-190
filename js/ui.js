@@ -15,6 +15,8 @@ export function loadSettings() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
   s = migrateControls({ ...DEFAULTS, ...s });
+  // old builds used fake 5-digit ids (builtin-11046 = team 1046 + 10000); map to the real team ids
+  { const m = /^builtin-(\d{5})$/.exec(s.robotId || ''); if (m) s.robotId = 'builtin-' + (+m[1] - 10000); }
   if (s.camera === 'chase') s.camera = 'third';
   if (!['driver', 'third', 'first'].includes(s.camera)) s.camera = 'driver';
   if (!Array.isArray(s.speeds) || s.speeds.length !== 3) s.speeds = [...DEFAULTS.speeds];
@@ -24,7 +26,7 @@ export const saveSettings = (s) => { try { localStorage.setItem(KEY, JSON.string
 
 // ---------- robots (with fallback to ROBOT_PRESETS) ----------
 const NUMS = ['1678', '254', '971', '2910', '118', '1323'];
-const FALLBACK = ROBOT_PRESETS.map((p, i) => ({ id: 'builtin-' + p.id, number: NUMS[i % NUMS.length], name: p.name, team: p.name, place: 'Fictional team', source: 'builtin', preset: p, stats: null }));
+const FALLBACK = ROBOT_PRESETS.map((p, i) => ({ id: 'builtin-' + p.id, number: NUMS[i % NUMS.length], name: p.name, team: p.name, place: '', source: 'builtin', preset: p, stats: null }));
 const roster = () => (RBM?.ROSTER?.length ? RBM.ROSTER : FALLBACK);
 let ALL = roster().slice();
 export async function refreshRobots() {

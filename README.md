@@ -22,7 +22,7 @@ This project was inspired by [frsim.com](https://frsim.com/), a browser simulato
 - driver station, third-person and first-person cameras
 - a similar control layout for keyboard and controller
 
-Everything here is our own code, built for our own game. It isn't affiliated with frsim, FIRST or any sponsor, and the CPU teams are fictional.
+Everything here is our own code, built for our own game. It isn't affiliated with frsim, FIRST or any sponsor, and the built-in robots use real FRC team numbers, nicknames and cities, while the robot designs are made up for this game.
 
 ## Features
 

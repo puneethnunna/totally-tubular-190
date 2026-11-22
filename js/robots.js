@@ -39,19 +39,21 @@ function entry(number, name, team, place, tpl, o = {}, model = {}, statsExtra = 
   return { id: 'builtin-' + number, number: String(number), name, team, place, source: 'builtin', preset, stats: deriveStats(preset, statsExtra) };
 }
 
+// Real FRC team numbers/nicknames/cities (source: The Blue Alliance); the robot designs themselves are made up for this game.
 // accents are powder-coat team colors (deep, slightly desaturated); bumpers are always alliance cloth.
 // model.frame: 'black' = black anodized tube, 'silver' = satin aluminum tube.
 export const ROSTER = [
-  entry(11046, 'Bunyip', 'Brickworks Robotics', 'Harbor Falls', 'stacker', { speed: 1.05, mass: 64 }, { accent: 0xe8731a, frame: 'black', mastHeight: 1.0 }),
-  entry(11414, 'Undertow', 'Tidewater Engineering', 'Saltmarsh Bay', 'tosser', { speed: 1.04, accel: 1.05 }, { accent: 0x14857c, frame: 'silver', mastHeight: 0.8 }),
-  entry(11114, 'Redline', 'Foundry Forge', 'Ironvale', 'climber', { speed: 1.08, mass: 66 }, { accent: 0xc8202f, frame: 'black', mastHeight: 1.3 }),
-  entry(13310, 'Static', 'Kestrel Alliance', 'Mesa Verde Flats', 'sweeper', { speed: 1.02, accel: 1.1, mass: 57 }, { accent: 0xf0b400, frame: 'black', mastHeight: 0.8 }),
-  entry(16328, 'Gearbox', 'Burrow Collective', 'Copperfield', 'stacker', { speed: 0.92, accel: 0.9, mass: 68, placeTime: 0.6, canLower: true }, { accent: 0x6a3fb5, frame: 'silver', mastHeight: 1.12 }),
-  entry(12910, 'Pronghorn', 'Cedar Run Makers', 'Cedar Run', 'stacker', { speed: 1.1, accel: 1.1, mass: 59, placeTime: 0.55 }, { accent: 0x1f62d6, frame: 'silver', mastHeight: 0.92 }),
-  entry(11690, 'Comet Trail', 'Lodestar Robotics', 'Northpoint', 'tosser', { speed: 0.95, mass: 62, turnRate: 4.2 }, { accent: 0xc2338a, frame: 'black', mastHeight: 0.9 }),
-  entry(17558, 'Ctrl-Z', 'Rewind Robotics', 'Lakeshore', 'sweeper', { speed: 1.06, accel: 1.0, mass: 55, canLower: true }, { accent: 0x0e93a3, frame: 'silver', mastHeight: 0.85 }),
-  entry(10971, 'Phalanx', 'Mixtape Mechanics', 'Silver Hollow', 'climber', { speed: 1.0, accel: 1.1, climbTime: 0.7, mass: 63 }, { accent: 0xe3c000, frame: 'black', mastHeight: 1.25 }),
-  entry(10118, 'Sea Monster', 'Bayou Builders', 'Gulfport Landing', 'stacker', { speed: 0.98, accel: 1.15, mass: 61, intakeTime: 0.2 }, { accent: 0x12a06b, frame: 'silver', mastHeight: 1.05 }),
+  entry(190, 'Gompei and the H.E.R.D.', 'Gompei and the H.E.R.D.', 'Worcester, MA', 'stacker', { speed: 1.1, accel: 1.1, mass: 59, placeTime: 0.55 }, { accent: 0x9b1b30, frame: 'black', mastHeight: 0.95 }),
+  entry(1046, 'Aztechs', 'Aztechs', 'Palm Desert, CA', 'stacker', { speed: 1.05, mass: 64 }, { accent: 0xe8731a, frame: 'black', mastHeight: 1.0 }),
+  entry(1414, 'IHOT', 'IHOT', 'Atlanta, GA', 'tosser', { speed: 1.04, accel: 1.05 }, { accent: 0x14857c, frame: 'silver', mastHeight: 0.8 }),
+  entry(1114, 'Simbotics', 'Simbotics', 'St. Catharines, ON', 'climber', { speed: 1.08, mass: 66 }, { accent: 0xc8202f, frame: 'black', mastHeight: 1.3 }),
+  entry(3310, 'Black Hawk Robotics', 'Black Hawk Robotics', 'Heath, TX', 'sweeper', { speed: 1.02, accel: 1.1, mass: 57 }, { accent: 0xf0b400, frame: 'black', mastHeight: 0.8 }),
+  entry(6328, 'Mechanical Advantage', 'Mechanical Advantage', 'Littleton, MA', 'stacker', { speed: 0.92, accel: 0.9, mass: 68, placeTime: 0.6, canLower: true }, { accent: 0x6a3fb5, frame: 'silver', mastHeight: 1.12 }),
+  entry(2910, 'Jack in the Bot', 'Jack in the Bot', 'Mill Creek, WA', 'stacker', { speed: 1.1, accel: 1.1, mass: 59, placeTime: 0.55 }, { accent: 0x1f62d6, frame: 'silver', mastHeight: 0.92 }),
+  entry(1690, 'Orbit', 'Orbit', 'Binyamina, Israel', 'tosser', { speed: 0.95, mass: 62, turnRate: 4.2 }, { accent: 0xc2338a, frame: 'black', mastHeight: 0.9 }),
+  entry(7558, 'ALT-F4', 'ALT-F4', 'North York, ON', 'sweeper', { speed: 1.06, accel: 1.0, mass: 55, canLower: true }, { accent: 0x0e93a3, frame: 'silver', mastHeight: 0.85 }),
+  entry(971, 'Spartan Robotics', 'Spartan Robotics', 'Mountain View, CA', 'climber', { speed: 1.0, accel: 1.1, climbTime: 0.7, mass: 63 }, { accent: 0xe3c000, frame: 'black', mastHeight: 1.25 }),
+  entry(118, 'Robonauts', 'Robonauts', 'Houston, TX', 'stacker', { speed: 0.98, accel: 1.15, mass: 61, intakeTime: 0.2 }, { accent: 0x12a06b, frame: 'silver', mastHeight: 1.05 }),
 ];
 
 // ---------- persistence (IndexedDB with in-memory fallback) ----------

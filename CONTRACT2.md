@@ -21,8 +21,8 @@ uppercase; body 13–15px 600.
 ```js
 // A robot the player or a CPU can drive.
 RobotDef = {
-  id: 'builtin-254' | 'stl-<uuid>',
-  number: '254', name: 'Cheddar', team: 'Fictional team name', place: 'City, ST',
+  id: 'builtin-190' | 'stl-<uuid>',
+  number: '254', name: 'Cheddar', team: 'Team nickname', place: 'City, ST',
   source: 'builtin' | 'stl',
   preset: {                 // what sim.js / ai.js read (superset of a ROBOT_PRESETS entry)
     id, name, drive: 'swerve'|'tank', maxSpeed, accel, turnRate,
@@ -34,7 +34,7 @@ RobotDef = {
   },
   stats: { speedFtS, accelFtS2, pushLb, capacity, ... }   // display-only, for the spec panel
 }
-export const ROSTER;                         // ~10 built-in CPU/player robots (fictional teams; numbers ok)
+export const ROSTER;                         // ~10 built-in CPU/player robots (real FRC team numbers, made-up designs; ROSTER[0] = team 190 = default player robot)
 export async function listRobots();          // ROSTER + imported robots (IndexedDB), imported first
 export async function getRobot(id);
 export async function saveImportedRobot(def, meshData);   // persists to IndexedDB
