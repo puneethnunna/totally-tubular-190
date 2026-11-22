@@ -66,9 +66,9 @@ export function clampStart(alliance, x, z) {
 }
 
 // Robot preview host wrapper: real preview3d if available, else a number/name placeholder.
-function makePreview(host) {
+function makePreview(host, opts) {
   let pv = null;
-  try { pv = PV?.createRobotPreview?.(host) || null; } catch (e) { console.warn('preview3d', e); }
+  try { pv = PV?.createRobotPreview?.(host, opts) || null; } catch (e) { console.warn('preview3d', e); }
   return {
     show(def, alliance) {
       if (pv) { try { pv.show(def, alliance); return; } catch (e) { console.warn(e); pv = null; } }
@@ -200,7 +200,7 @@ export function createUI(app) {
   homeEl.querySelector('.car.r').addEventListener('click', () => homeShow(1));
   hooks.home = {
     enter() {
-      dn.value = st.driverName; paintName(); hpv = makePreview(homeEl.querySelector('.pvbox')); homeShow(0);
+      dn.value = st.driverName; paintName(); hpv = makePreview(homeEl.querySelector('.pvbox'), { fitRing: true }); homeShow(0);
       pushLayer({ items: [...homeItems, nameItem], back: () => show('pick'), onKey: (e) => { if (e.key === 'ArrowLeft') return homeShow(-1) || true; if (e.key === 'ArrowRight') return homeShow(1) || true; } });
     },
     leave() { clearInterval(htimer); hpv?.dispose(); hpv = null; },
@@ -541,7 +541,7 @@ export function createUI(app) {
   const clampv = (v, a, b) => Math.max(a, Math.min(b, v));
   const rowSlider = (label, min, max, step, get, set, fmt = (v) => v + '%') => {
     const el = h(`<div class="srow"><span>${label}</span><div class="ctl"><input type="range" min="${min}" max="${max}" step="${step}"><span class="pct"></span></div></div>`);
-    const inp = el.querySelector('input'), pct = el.querySelector('.pct'), paint = () => { inp.value = get(); pct.textContent = fmt(get()); };
+    const inp = el.querySelector('input'), pct = el.querySelector('.pct'), paint = () => { inp.value = get(); pct.textContent = fmt(get()); inp.style.setProperty('--p', `${((+inp.value - min) / (max - min || 1)) * 100}%`); };
     inp.addEventListener('input', () => { set(+inp.value); paint(); }); paint();
     return { el, adjust: (d) => { set(clampv(get() + d * step, min, max)); paint(); } };
   };

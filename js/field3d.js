@@ -5,7 +5,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // Field palette sampled from the game CAD renders (ref/image1-3.png). Independent of robot bumper colors.
 export const PALETTE = {
-  carpet: '#898989', blue: '#0000e4', red: '#e40000', structure: '#909090', post: '#595959',
+  carpet: '#454b5a', blue: '#1d42d6', red: '#d4262b', structure: '#909090', post: '#595959',
   shelf: '#b0bbc2', shelfFloor: '#7e8a92', chute: '#858585', peg: '#afbac2',
 };
 export const FIELD_COLOR = { blue: PALETTE.blue, red: PALETTE.red };

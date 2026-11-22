@@ -27,7 +27,7 @@ function loop(now) {
   for (const p of previews) p.frame(dt);
 }
 
-export function createRobotPreview(host, { autoRotate = true, spin = 0.5 } = {}) {
+export function createRobotPreview(host, { autoRotate = true, spin = 0.5, fitRing = false } = {}) {
   const canvas = host instanceof HTMLCanvasElement ? host : document.createElement('canvas');
   if (canvas !== host) { canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none'; host.appendChild(canvas);
     if (getComputedStyle(host).position === 'static') host.style.position = 'relative'; }
@@ -52,7 +52,8 @@ export function createRobotPreview(host, { autoRotate = true, spin = 0.5 } = {})
   function placeCam(aspect) {
     if (!fit) return;
     const t = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2));
-    const vHalf = Math.max(fit.y * 0.72, 0.5) + 0.3, hHalf = Math.max(fit.x, fit.z) * 0.66 + 0.05;
+    let vHalf = Math.max(fit.y * 0.72, 0.5) + 0.3, hHalf =Math.max(fit.x, fit.z) * 0.66 + 0.05;
+    if (fitRing) { hHalf = Math.max(hHalf, 1.62); vHalf = Math.max(vHalf * 1.3, 2.1); }   // home carousel: the whole gold ring stays in frame
     const d = Math.max(vHalf / t, hHalf / (t * aspect)) * 1.02;
     cam.position.set(d * 0.55, d * 0.45 + fit.y * 0.1, d * 0.7); cam.lookAt(0, fit.y * 0.42, 0);
   }
