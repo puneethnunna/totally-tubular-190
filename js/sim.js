@@ -339,7 +339,11 @@ export function createSim(options = {}) {
       if (d > 1e-6 && Math.abs(wrap(Math.atan2(dz, dx) - r.heading)) > TUNE.climbAngle) continue;
       if (d < bd - 1e-6 || (Math.abs(d - bd) <= 1e-6 && q.level > best.level)) { best = q; bd = d; }
     }
-    return best && best.level <= r.preset.maxClimb ? best : null; // lined up with a platform above maxClimb: no fallback to a neighbour
+    if (best && best.level > r.preset.maxClimb) { // lined up with a platform above maxClimb: no fallback to a neighbour, but say why
+      if (!(k.climbMsgT > state.time)) { k.climbMsgT = state.time + 2; emit({ type: 'invalid', robotId: r.id, text: `This robot can only climb to LEVEL ${r.preset.maxClimb}` }); }
+      return null;
+    }
+    return best;
   }
 
   function startClimb(r, k) {
@@ -442,9 +446,11 @@ export function createSim(options = {}) {
     a.t += dt;
     const u = clamp(a.t / a.duration, 0, 1);
     if (a.type === 'climb') {
-      const e = smooth(u), q = k.act.q;
-      r.x = k.act.fx + (k.act.tx - k.act.fx) * e; r.z = k.act.fz + (k.act.tz - k.act.fz) * e;
-      r.y = k.act.fy + (q.height - k.act.fy) * e; r.vx = r.vz = r.omega = 0;
+      // Two phases so the robot never passes through the platform: lift straight up at the edge (bumpers clear the top),
+      // then drive forward onto it.
+      const q = k.act.q, up = 0.55, lift = smooth(Math.min(1, u / up)), roll = smooth(Math.max(0, (u - up) / (1 - up)));
+      r.y = k.act.fy + (q.height + 0.015 - k.act.fy) * lift - (roll > 0 ? 0.015 * roll : 0);
+      r.x = k.act.fx + (k.act.tx - k.act.fx) * roll; r.z = k.act.fz + (k.act.tz - k.act.fz) * roll; r.vx = r.vz = r.omega = 0;
       r.arm = Math.sin(Math.PI * u);
       if (u >= 1) {
         k.platform = q; r.y = q.height; r.support = q.level; r.action = null; k.act = null;

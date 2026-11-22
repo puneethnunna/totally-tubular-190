@@ -463,3 +463,16 @@ console.log('sim tests passed');
   assert.equal(s.state.robots[0].liftTier, null, 'intake forces the lift down even if a tier is still requested');
   console.log('intake lowers lift ok');
 }
+
+// ---------- climb: lifts first, then drives on; never inside the platform below its top ----------
+for (const [preset, lvl] of [['stacker', 2], ['stacker', 3], ['climber', 4]]) {
+  const q = SIDES.blue.platforms[lvl - 2];
+  const s = createSim({ robots: [{ id: 'blue-0', alliance: 'blue', slot: 0, number: '1', preset }], midfield: { blue: 0, red: 0 } });
+  const r = s.state.robots[0]; r.x = (q.x0 + q.x1) / 2; r.z = q.z1 + 0.53; r.heading = -Math.PI / 2;
+  for (let i = 0; i < 120 * 5; i++) {
+    s.step(1 / 120, { 'blue-0': { climb: true } }, 'endgame');
+    if (r.action?.type === 'climb') assert.ok(!(r.z - 0.5 < q.z1 - 0.01 && r.y < q.height - 0.005), `L${lvl} climb passes through the platform`);
+  }
+  assert.equal(r.support, lvl, `${preset} reaches L${lvl}`);
+}
+console.log('climb clearance ok');
