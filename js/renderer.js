@@ -10,8 +10,8 @@ const MAX_TUBES = 216;
 // Measured from the CAD's station dividers (blue end: dividers at z = -1.70, 0.14, 2.0, 3.84; red is the (x,z) mirror).
 export const DRIVER_Z = { blue: [-0.78, 1.07, 2.92], red: [0.78, -1.07, -2.92] };
 export const CAM = {
-  driver: { dist: 0.6, eye: 1.8, fov: 55 },          // eye at x = -+(8.75 + dist), looking at (0, 0.5, 0)
-  third: { back: 3.5, up: 3.0, lookAhead: 1.8, lookY: 0.3, fov: 55 },
+  driver: { dist: 2.6, eye: 4.4, fov: 60 },          // eye at x = -+(8.75 + dist), looking at (0, 0.5, 0)
+  third: { back: 3.4, up: 4.2, lookAhead: 2.4, lookY: 0.2, fov: 60 },
   first: { fwd: 0.3, up: 0.75, pitch: 0.15, fov: 75 }, // pitch rad (~8.5 deg) downward
   top: { fov: 50 },
 };
@@ -30,17 +30,17 @@ export function createRenderer(canvas) {
   const gl = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
   gl.outputColorSpace = THREE.SRGBColorSpace;
   gl.toneMapping = THREE.ACESFilmicToneMapping;
-  gl.toneMappingExposure = 0.8;
+  gl.toneMappingExposure = 1.05;
   gl.shadowMap.enabled = true;
   gl.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x27303f);
-  scene.fog = new THREE.Fog(0x27303f, 45, 120);
+  scene.background = new THREE.Color(0x1f2330);
+  scene.fog = new THREE.Fog(0x1f2330, 45, 120);
   // frsim-style dark sky gradient (top #0b0f16 -> horizon #27303f), unlit and unfogged
   const sky = new THREE.Mesh(new THREE.SphereGeometry(200, 24, 16), new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { top: { value: new THREE.Color('#0b0f16') }, hor: { value: new THREE.Color('#27303f') } },
+    uniforms: { top: { value: new THREE.Color('#171a24') }, hor: { value: new THREE.Color('#2a2e3a') } },
     vertexShader: 'varying float h; void main(){ h = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }',
     fragmentShader: 'uniform vec3 top; uniform vec3 hor; varying float h; void main(){ gl_FragColor = vec4(mix(hor, top, pow(clamp(h,0.,1.), 0.55)), 1.);\n#include <colorspace_fragment>\n}',
   }));
@@ -52,10 +52,11 @@ export function createRenderer(canvas) {
   const pmrem = new THREE.PMREMGenerator(gl);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   pmrem.dispose();
-  scene.add(new THREE.HemisphereLight(0xd5e4ff, 0x4a4a4a, 0.3));      // sky fill + ground bounce (#4a4a4a)
-  const fill = new THREE.DirectionalLight(0xd5e4ff, 0.45);            // cool fill from the opposite side, no shadow
+  scene.environmentIntensity = 0.9;
+  scene.add(new THREE.HemisphereLight(0xe3ecff, 0x666a74, 0.9));      // sky fill + ground bounce (#4a4a4a)
+  const fill = new THREE.DirectionalLight(0xd5e4ff, 0.5);            // cool fill from the opposite side, no shadow
   fill.position.set(9, 10, -7); scene.add(fill);
-  const sun = new THREE.DirectionalLight(0xffffff, 2.2);              // key light
+  const sun = new THREE.DirectionalLight(0xffffff, 1.5);              // key light
   sun.position.set(-6, 20, 8);
   sun.castShadow = true;
   const sc = sun.shadow.camera;

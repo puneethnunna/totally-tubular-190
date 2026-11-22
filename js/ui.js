@@ -648,7 +648,7 @@ export function createUI(app) {
       nodes = [group('Driver', [r1]), group('Sound', [vol, mute]), group('Controls', [...sp, aal]), group('Match', [mid, hp])];
     } else if (t === 'display') {
       const q = rowTog('Graphics', [{ v: 'low', t: 'Low' }, { v: 'high', t: 'High' }], () => st.quality, (v) => { st.quality = v; save(); });
-      const bg = rowTog('Background (stands + crowd)', OO, () => st.background, (v) => { st.background = v; save(); });
+      const bg = rowTog('Background (stands)', OO, () => st.background, (v) => { st.background = v; save(); });
       const cm = rowTog('Default camera', Object.entries(CAMNAME).map(([v, t2]) => ({ v, t: t2 })), () => st.camera, (v) => { st.camera = v; save(); });
       const fl = rowTog('Camera follow', [{ v: 'smooth', t: 'Smooth' }, { v: 'tight', t: 'Tight' }, { v: 'locked', t: 'Locked' }], () => st.cameraFollow, (v) => { st.cameraFollow = v; save(); });
       const fr = rowTog('Field-relative drive', OO, () => st.fieldRelative, (v) => { st.fieldRelative = v; save(); });

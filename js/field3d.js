@@ -5,8 +5,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // Field palette sampled from the game CAD renders (ref/image1-3.png). Independent of robot bumper colors.
 export const PALETTE = {
-  carpet: '#454b5a', blue: '#1d42d6', red: '#d4262b', structure: '#909090', post: '#595959',
-  shelf: '#b0bbc2', shelfFloor: '#7e8a92', chute: '#858585', peg: '#afbac2',
+  carpet: '#454b5a', blue: '#2350e6', red: '#e03a3a', structure: '#b9bec6', post: '#5b606b',
+  shelf: '#9fb0ba', shelfFloor: '#7e8a92', chute: '#6f7480', peg: '#d3d8de',
 };
 export const FIELD_COLOR = { blue: PALETTE.blue, red: PALETTE.red };
 
@@ -100,15 +100,15 @@ const CLEAR = new Set(['endwall', 'sidewall']);
 
 function fieldMaterials() {
   // frsim-style presets: metals get the env map, painted/plastic parts stay matte.
-  const alu = (c, rough = 0.34, env = 0.9) => new THREE.MeshStandardMaterial({ color: c, metalness: 0.9, roughness: rough, envMapIntensity: env });
+  const alu = (c, rough = 0.34, env = 0.9) => new THREE.MeshStandardMaterial({ color: c, metalness: 0.55, roughness: Math.max(rough, 0.46), envMapIntensity: env * 0.7 });   // satin light aluminium
   const coat = (c, rough = 0.68, env = 0.35) => new THREE.MeshStandardMaterial({ color: c, metalness: 0, roughness: rough, envMapIntensity: env });
   const clear = (c, op) => new THREE.MeshPhysicalMaterial({   // polycarbClear
     color: c, transparent: true, opacity: op, roughness: 0.06, metalness: 0, ior: 1.5, reflectivity: 0.6,
     clearcoat: 0.6, clearcoatRoughness: 0.05, envMapIntensity: 1.3, depthWrite: false, side: THREE.DoubleSide,
     polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
   });
-  const hdpe = (a, f = 0) => coat(new THREE.Color(PALETTE[a]).multiplyScalar(1.12 + f), 0.7, 0.1);   // HDPE-like low-gloss platform / wall plastic
-  const apron = (a) => coat(new THREE.Color(PALETTE[a]).multiplyScalar(0.5), 0.6, 0.4);
+  const hdpe = (a, f = 0) => coat(new THREE.Color(PALETTE[a]).multiplyScalar(1.0 + f), 0.45, 0.25);   // flat, slightly glossy alliance plastic   // HDPE-like low-gloss platform / wall plastic
+  const apron = (a) => coat(new THREE.Color(PALETTE[a]).multiplyScalar(0.8), 0.5, 0.3);
   return {
     structure: alu(PALETTE.structure, 0.36, 0.8),
     rail: alu(PALETTE.structure, 0.30, 0.9),
@@ -117,8 +117,8 @@ function fieldMaterials() {
     chute: coat(PALETTE.chute, 0.6, 0.45),
     postwall: coat(PALETTE.post, 0.68, 0.35),
     endwall: clear(PALETTE.shelf, 0.42),
-    sidewall: clear(0xd8e8f0, 0.16),
-    post: new THREE.MeshStandardMaterial({ color: 0xcfd2d6, metalness: 1, roughness: 0.26, envMapIntensity: 1 }),   // steelZinc
+    sidewall: clear(0xdce8ee, 0.2),
+    post: new THREE.MeshStandardMaterial({ color: 0xd3d8de, metalness: 0.8, roughness: 0.34, envMapIntensity: 0.8 }),   // steelZinc
     ...Object.fromEntries(['blue', 'red'].flatMap((a) => [2, 3, 4].map((L) => [`platform-${a}-${L}`, hdpe(a)]))),
     'wall-blue': hdpe('blue'), 'wall-red': hdpe('red'),
     'station-blue': apron('blue'), 'station-red': apron('red'),
@@ -130,7 +130,7 @@ const LONG_WALL = [[-8.23, -1.83, 0.432], [-1.83, 1.83, 1.194], [1.83, 5.18, 0.4
 
 // Thin aluminum framing on the clear long walls: top + bottom rails and uprights at every height step.
 function longWallFrame() {
-  const parts = [], bx = (w, h, d, x, y, z) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); parts.push(g); };
+  const parts = [], skirt = [], bx = (w, h, d, x, y, z) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); parts.push(g); };
   for (const sg of [1, -1]) {
     const z = sg * 3.835, segs = LONG_WALL.map(([a, b, h]) => (sg > 0 ? [a, b, h] : [-b, -a, h])).sort((p, q) => p[0] - q[0]);
     for (const [a, b, h] of segs) {
@@ -142,11 +142,17 @@ function longWallFrame() {
       bx(0.07, h + 0.05, 0.1, x, (h + 0.05) / 2, z);
     }
     // mid-span uprights on the long low sections so the panels read as framed lites
+    for (const [a, b, h] of segs) skirt.push([b - a, Math.min(0.2, h), (a + b) / 2, z]);
     for (const [a, b, h] of segs) if (b - a > 3.2) for (let k = 1; k < Math.round((b - a) / 1.6); k++) { const x = a + ((b - a) * k) / Math.round((b - a) / 1.6); bx(0.05, h, 0.09, x, h / 2, z); }
   }
-  const m = new THREE.Mesh(mergeGeometries(parts), new THREE.MeshStandardMaterial({ color: 0xc9ccd1, metalness: 0.9, roughness: 0.34, envMapIntensity: 0.9 }));
+  const m = new THREE.Mesh(mergeGeometries(parts), new THREE.MeshStandardMaterial({ color: 0xd2d5da, metalness: 0.5, roughness: 0.46, envMapIntensity: 0.6 }));
   m.name = 'long-wall-frame'; m.castShadow = true; m.receiveShadow = true;
-  return m;
+  // low dark-grey plate under the clear panels (frsim side walls)
+  const sg = mergeGeometries(skirt.map(([w, h, x, z]) => { const g = new THREE.BoxGeometry(w, h, 0.11); g.translate(x, h / 2, z); return g; }));
+  const sk = new THREE.Mesh(sg, new THREE.MeshStandardMaterial({ color: 0x3a3e49, roughness: 0.6, metalness: 0, envMapIntensity: 0.3 }));
+  sk.name = 'long-wall-skirt'; sk.castShadow = true; sk.receiveShadow = true;
+  const grp = new THREE.Group(); grp.add(m, sk); grp.name = 'long-wall-frame-group';
+  return grp;
 }
 
 function noiseCanvas(n, amp, base) {
@@ -287,6 +293,40 @@ export async function loadFieldModel(url = FIELD_URL) {
   return out;
 }
 
+
+// Generic fiducial-style tags (own pattern: 6x6 random bit grid, black ring, white margin). Visual only.
+const tagTexCache = new Map();
+function tagMaterial(id) {
+  if (tagTexCache.has(id)) return tagTexCache.get(id);
+  const R = rng(9100 + id * 7919), N = 8, px = 16, c = document.createElement('canvas'); c.width = c.height = (N + 2) * px;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#000'; g.fillRect(px, px, N * px, N * px);
+  g.fillStyle = '#fff';
+  for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) if (R() < 0.5) g.fillRect((2 + i) * px, (2 + j) * px, px, px);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = THREE.NearestFilter; t.anisotropy = 8;
+  const m = new THREE.MeshBasicMaterial({ map: t, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+  tagTexCache.set(id, m); return m;
+}
+let tagId = 0;
+function addTag(parent, x, y, z, nx, nz, size = 0.2) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size), tagMaterial(tagId++ % 30));
+  m.position.set(x + nx * 0.006, y, z + nz * 0.006); m.rotation.y = Math.atan2(nx, nz); m.name = 'tag'; m.receiveShadow = false;
+  parent.add(m); return m;
+}
+function buildTags() {
+  const g = new THREE.Group(); g.name = 'field-tags';
+  for (const a of ALLIANCES) {
+    const S = SIDES[a], lower = S.posts.filter((p) => p.tier === 'lower').sort((p, q) => p.z - q.z), upper = S.posts.find((p) => p.tier === 'upper');
+    const ym = upper ? (upper.y + lower[0].y) / 2 : lower[0].y + 0.25, e = Math.sign(lower[0].baseX), z0 = S.scoringZone.z0, z1 = S.scoringZone.z1;
+    for (const k of [0.17, 0.5, 0.83]) addTag(g, e * (FIELD.halfL - 0.15), 1.72, z0 + (z1 - z0) * k, -e, 0);   // end wall, above the posts
+    for (let i = 1; i < lower.length - 1; i += 3) addTag(g, lower[i].baseX + lower[i].dirX * 0.012, ym, (lower[i].z + lower[i + 1].z) / 2, lower[i].dirX, 0, 0.14);
+    for (const p of S.platforms) if (p.level >= 3) addTag(g, (p.x0 + p.x1) / 2, p.height - 0.13, Math.sign(p.z0 + p.z1) > 0 ? p.z0 : p.z1, 0, p.z0 + p.z1 > 0 ? -1 : 1, 0.16);   // platform fronts
+    const sw = S.shortWall; addTag(g, (sw.x0 + sw.x1) / 2, sw.height - 0.2, sw.z1 + 0.0, 0, 1, 0.2); addTag(g, (sw.x0 + sw.x1) / 2, sw.height - 0.2, sw.z0, 0, -1, 0.2);
+  }
+  return g;
+}
+
 export function buildField(scene) {
   const group = new THREE.Group(); group.name = 'field';
   const { halfL, halfW, wallHeight } = FIELD;
@@ -294,7 +334,7 @@ export function buildField(scene) {
   const wallGl = glass(0xe9f1f6, 0.38);
 
   // ground beyond field + carpet
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), std(0x1a1d25, { roughness: 1, envMapIntensity: 0.1 }));
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), std(0x1c202c, { roughness: 1, envMapIntensity: 0.1 }));
   ground.rotation.x = -Math.PI / 2; ground.position.y = -0.03; ground.receiveShadow = true;
   group.add(ground);
   // Everything in standIn is a procedural copy shown until the CAD model loads (or if it can't).
@@ -356,11 +396,11 @@ export function buildField(scene) {
   buildStands(stands);
   // far walls + end curtains stay well outside the field
   for (const s of [-1, 1]) {
-    stands.add(box(60, 11, 0.5, std(0x151822, { roughness: 0.9 }), 0, 5.5, s * 17));
-    stands.add(box(60, 0.9, 0.52, std(s < 0 ? FIELD_COLOR.blue : FIELD_COLOR.red, { roughness: 0.6 }), 0, 7.2, s * 16.7));
-    stands.add(box(0.5, 11, 36, std(0x12141c, { roughness: 0.9 }), s * 27, 5.5, 0, false));
+    stands.add(box(60, 11, 0.5, std(0x1b1f2b, { roughness: 0.9 }), 0, 5.5, s * 17));
+    stands.add(box(0.5, 11, 36, std(0x1b1f2b, { roughness: 0.9 }), s * 27, 5.5, 0, false));
   }
 
+  group.add(buildTags());
   scene.add(group);
   const result = { group, carpet, postWalls: post, stands, crowd: stands.userData.crowd, cad: null };
   result.ready = loadFieldModel().then((mesh) => {
@@ -377,15 +417,15 @@ function rng(seed) { // mulberry32: spectators/seat layout is the same every loa
 // Frsim-style bleachers: per row two seat planks, a footboard, a back rail, uprights and a stringer, all one
 // InstancedMesh of unit boxes. Spectators: ~30% of seats, in a few clusters, as two instanced meshes.
 function buildStands(stands) {
-  const R = rng(20260101), steel = new THREE.MeshStandardMaterial({ color: 0xaab0b8, metalness: 0.7, roughness: 0.4 });
+  const R = rng(20260101), steel = new THREE.MeshStandardMaterial({ color: 0xc3c7cf, metalness: 0.35, roughness: 0.5, envMapIntensity: 0.6 });
   const ROWS = 8, X0 = -17, X1 = 17, PITCH = 2.4, rows = [];
   const beams = [];   // [sx, sy, sz, x, y, z]
   for (const s of [-1, 1]) for (let i = 0; i < ROWS; i++) {
     const z = s * (6.0 + i * 0.85), h = 0.38 + i * 0.42;
     rows.push({ s, z, h });
-    beams.push([X1 - X0, 0.04, 0.26, 0, h, z - s * 0.05]);              // seat plank
-    beams.push([X1 - X0, 0.04, 0.2, 0, h - 0.02, z + s * 0.21]);        // seat plank 2
-    beams.push([X1 - X0, 0.04, 0.3, 0, h - 0.4, z - s * 0.5]);          // footboard of the row below
+    beams.push([X1 - X0, 0.05, 0.3, 0, h, z - s * 0.05]);              // seat plank
+    beams.push([X1 - X0, 0.05, 0.26, 0, h - 0.02, z + s * 0.24]);        // seat plank 2
+    beams.push([X1 - X0, 0.05, 0.34, 0, h - 0.4, z - s * 0.5]);          // footboard of the row below
     beams.push([X1 - X0, 0.05, 0.05, 0, h + 0.45, z + s * 0.36]);       // back rail
     beams.push([X1 - X0, 0.04, 0.04, 0, h + 0.2, z + s * 0.36]);        // mid rail
     for (let x = X0; x <= X1 + 0.01; x += PITCH) {
@@ -407,27 +447,6 @@ function buildStands(stands) {
   bm.instanceMatrix.needsUpdate = true; bm.castShadow = false; bm.receiveShadow = false; bm.frustumCulled = false;
   stands.add(bm);
 
-  // seats -> clustered pick of ~30%
-  const seats = [];
-  for (const r of rows) for (let x = X0 + 0.4; x < X1; x += 0.46) seats.push({ x, r, sc: 0 });
-  const cl = []; for (let i = 0; i < 14; i++) cl.push({ x: X0 + R() * (X1 - X0), s: R() < 0.5 ? -1 : 1, row: R() * ROWS, w: 1.5 + R() * 3, rw: 1 + R() * 2 });
-  for (const t of seats) {
-    const row = Math.round((t.r.z * t.r.s - 6.0) / 0.85);
-    t.sc = R() * 0.55;
-    for (const c of cl) if (c.s === t.r.s) t.sc += Math.exp(-(((t.x - c.x) / c.w) ** 2 + ((row - c.row) / c.rw) ** 2));
-  }
-  seats.sort((a, b) => b.sc - a.sc);
-  const crowd = seats.slice(0, Math.round(seats.length * 0.3));
-  const body = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.5, 0.22), new THREE.MeshStandardMaterial({ roughness: 0.9 }), crowd.length);
-  const headM = new THREE.InstancedMesh(new THREE.SphereGeometry(0.1, 8, 6), new THREE.MeshStandardMaterial({ roughness: 0.8, color: 0xd9b59b }), crowd.length);
-  const col = new THREE.Color(), skin = [0xe0b99f, 0xc68e6b, 0x8d5a3b, 0xf1cdb4, 0x6b4430];
-  crowd.forEach((t, i) => {
-    const y = t.r.h + 0.02;
-    body.setMatrixAt(i, m4.makeTranslation(t.x, y + 0.27, t.r.z + t.r.s * 0.15));
-    headM.setMatrixAt(i, m4.makeTranslation(t.x, y + 0.62, t.r.z + t.r.s * 0.15));
-    col.setHSL(R(), 0.3, 0.06 + R() * 0.16); body.setColorAt(i, col);
-    headM.setColorAt(i, col.setHex(skin[(R() * skin.length) | 0]));
-  });
-  for (const m of [body, headM]) { m.instanceMatrix.needsUpdate = true; m.frustumCulled = false; stands.add(m); }
-  stands.userData.crowd = body;
+  // empty bleachers (frsim): no spectators
+  stands.userData.crowd = null;
 }

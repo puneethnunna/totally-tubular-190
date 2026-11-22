@@ -37,11 +37,11 @@ export function createTubeModel() {
 // ---------- material library (mirrors frsim's robot presets; `shine` -> envMapIntensity, scene.environment supplies the reflections) ----------
 // [color, metalness, roughness, shine, extra]
 const LIB = {
-  aluminumBare:     [0xc9ced4, 1, 0.22, 1],
-  aluminumSatin:    [0xbcc1c8, 1, 0.30, 1],
+  aluminumBare:     [0xd3d7dc, 0.75, 0.34, 0.8],
+  aluminumSatin:    [0xcdd1d7, 0.7, 0.42, 0.75],
   aluminumAnodized: [0x30343b, 0.6, 0.36, 0.8],
-  aluminumClear:    [0xdfe2e6, 1, 0.26, 1],
-  steelZinc:        [0xcfd2d6, 1, 0.26, 1],
+  aluminumClear:    [0xe3e6ea, 0.75, 0.36, 0.8],
+  steelZinc:        [0xd3d6da, 0.8, 0.36, 0.8],
   steelRaw:         [0x7d8186, 0.55, 0.62, 0.6],
   steelBlack:       [0x1d1d1f, 0.7, 0.45, 0.7],
   steelChain:       [0x8e9196, 1, 0.34, 1],
@@ -56,7 +56,7 @@ const LIB = {
   plastic:          [0x202226, 0, 0.5, 0.6],
   powderCoat:       [0xe8731a, 0, 0.68, 0.55],
   motor:            [0x3b3e45, 0.6, 0.42, 0.7],
-  cloth:            [0x1b3fa6, 0, 0.93, 0.18],
+  cloth:            [0x2149c4, 0, 0.93, 0.12],
   plywood:          [0xb89560, 0, 0.85, 0.15],
 };
 const matCache = new Map();
@@ -74,7 +74,7 @@ export function getMaterial(name, color, extra) {
 }
 export const MATERIALS = Object.keys(LIB);
 const A = (n) => getMaterial(n);
-const CLOTH = { blue: 0x1b3fa6, red: 0xb3141c };
+const CLOTH = { blue: 0x2149c4, red: 0xc41f27 };
 const clothMat = (alliance) => getMaterial('cloth', CLOTH[alliance] ?? CLOTH.blue);
 const accentMat = (hex) => getMaterial('powderCoat', hex);
 
