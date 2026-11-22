@@ -2,7 +2,7 @@
 import { SIDES, opponent, inRect } from './config.js';
 import { createInput, planPlace } from './input.js';
 import { createUI, loadSettings, saveSettings, ensureMeshes } from './ui.js';
-import { createAutoAlign, ZONE_MSG } from './autoalign.js';
+import { createAutoAlign, ZONE_MSG, inScoringZone } from './autoalign.js';
 import { createAutoPath } from './autopath.js'; // AUTOPATH hook
 import { createSounds } from './sounds.js';
 
@@ -185,7 +185,7 @@ function frame(t) {
           // Armed: a post already in reach places directly; inside the own scoring zone auto-align to the nearest post;
           // anywhere else (or if auto-align can't start) the tube is shot out from the raised elevator.
           const plan = planPlace({ robot: r, preset: pr, armed, posts: SIDES[q.alliance].posts, tune: sim.tune });
-          const inZone = inRect(SIDES[r.alliance].scoringZone, r.x, r.z);
+          const inZone = inScoringZone(r);
           if (plan.act && plan.act !== 'scoreFloor') i[plan.act] = true;
           else if (inZone && settings.autoAlign !== false) {
             const res = aa.start(sim, q.id, armed);

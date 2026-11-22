@@ -24,7 +24,8 @@ export const ZONE_MSG = 'Auto-align only works in your scoring zone';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-export const inScoringZone = (r) => !!r && inRect(SIDES[r.alliance].scoringZone, r.x, r.z);
+// Counts as soon as the bumper reaches the scoring-zone tape (not the robot centre), so auto-align works from the first line.
+export const inScoringZone = (r) => !!r && inRect(SIDES[r.alliance].scoringZone, r.x, r.z, -((r.bumper ? Math.max(r.bumper.lx, r.bumper.lz) / 2 : 0.5) + 0.05));
 const hxOf = (r) => (r.bumper ? r.bumper.lx / 2 : r.radius || 0.5);
 const speedOf = (r) => Math.hypot(r.vx || 0, r.vz || 0);
 const label = (p) => `${p.tier.toUpperCase()} ${p.index + 1}`;

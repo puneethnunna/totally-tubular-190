@@ -115,3 +115,17 @@ t('times out instead of running forever', () => {
   assert.equal(aa.active, false); assert.match(aa.result.reason, /timed out/); assert.ok(T < 5);
 });
 console.log(`\n${n} tests passed`);
+
+// auto-align starts as soon as the bumper reaches the scoring-zone tape (robot centre still outside)
+{
+  const { createSim } = await import('../js/sim.js');
+  const { createAutoAlign } = await import('../js/autoalign.js');
+  const s = createSim({ robots: [{ id: 'blue-0', alliance: 'blue', slot: 0, number: '190', preset: 'stacker' }], midfield: { blue: 0, red: 0 } });
+  const r = s.state.robots[0]; r.x = 4.75; r.z = -1; r.heading = 0; s.step(1 / 120, {}, 'teleop');
+  const aa = createAutoAlign(); const res = aa.start(s, 'blue-0', 'upper');
+  if (!res.ok) throw new Error('auto-align should start from the zone line: ' + res.reason);
+  let placed = false;
+  for (let i = 0; i < 120 * 6 && aa.active; i++) { const o = aa.step(s, 1 / 120, null) || {}; s.step(1 / 120, { 'blue-0': o }, 'teleop'); for (const e of s.drainEvents()) if (e.type === 'place') placed = true; }
+  if (!placed) throw new Error('auto-align from the zone line did not place');
+  console.log('ok - auto-align from the zone line');
+}
