@@ -236,7 +236,11 @@ export function createRenderer(canvas) {
           tgtP.set(p.tipX - p.dirX * (PEG_FINAL + PEG_GAP * slot), p.y, p.z);
         }
         yaw = Math.PI / 2;
-      } else if (tb.state === 'chute') yaw = 0;
+      } else if (tb.state === 'chute') {   // tips from upright (tilt 1) to flat (tilt 0) as it settles
+        const k = tb.tilt || 0;
+        Q.tmp2.setFromAxisAngle(Y, tb.yaw || 0);
+        Q.tmp.copy(Q.flat).slerp(Q.tmp2, k);
+      }
       else if (tb.state === 'flight') {
         AX.set(-tb.vz, 0, tb.vx);
         if (AX.lengthSq() > 1e-6) Q.tmp.premultiply(Q.tmp2.setFromAxisAngle(AX.normalize(), t * 7));

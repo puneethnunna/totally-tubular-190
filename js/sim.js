@@ -18,7 +18,7 @@ const TUNE = {
   reach: 0.6, liftSpeed: 2.2, placeBase: 0.15, placeAngle: (35 * Math.PI) / 180, placeLateral: 0.3,
   launchAngle: (20 * Math.PI) / 180, launchMin: 1.5, launchMax: 5, throwDist: 4,
   intakeNear: 0.3, intakeFar: 1.1, intakeHalf: 0.55, intakeHalfWide: 0.8,
-  feedCooldown: 1.5, manualCooldown: 0.8, chuteSpeed: 2.4, chuteTime: 0.6, feedClear: 1.0,
+  feedCooldown: 1.5, manualCooldown: 0.8, chuteSpeed: 1.6, chuteTime: 2.0, chuteExitY: 0.5, chuteStagger: 1.2, feedClear: 1.0,
   releaseAt: 0.7, doubleExtra: 0.5, climbTouch: 0.2, climbAngle: (60 * Math.PI) / 180,
 };
 
@@ -156,7 +156,7 @@ export function createSim(options = {}) {
   let tubeSeq = 0;
   function newTube(origin, x, z, state = 'floor') {
     const t = { id: `t${tubeSeq++}`, origin, x, y: TR, z, vx: 0, vy: 0, vz: 0, state, holder: null, post: null,
-      px: x, pz: z, sx: undefined, sz: 0, stackIndex: -1, placedInAuto: false, yaw: 0, spin: 0, lockT: 0, chuteT: 0, moving: false, flight: null };
+      px: x, pz: z, sx: undefined, sz: 0, stackIndex: -1, placedInAuto: false, yaw: 0, spin: 0, lockT: 0, chuteT: 0, tilt: 0, vy: 0, moving: false, flight: null };
     tubes.push(t); tubeById.set(t.id, t);
     return t;
   }
@@ -199,7 +199,7 @@ export function createSim(options = {}) {
   const reserve = {};
   for (const a of ALLIANCES) reserve[a] = Math.max(0, TUBE.perAlliance - midfield[a] - preloads[a]);
 
-  const chutes = ALLIANCES.flatMap((a) => SIDES[a].chutes.map((c, i) => ({ alliance: a, index: i, c, cd: 0.5 + 0.2 * i })));
+  const chutes = ALLIANCES.flatMap((a) => SIDES[a].chutes.map((c, i) => ({ alliance: a, index: i, c, cd: 0.5 + 1.2 * i })));   // staggered so the human players feed one tube at a time
 
   const state = { time: 0, robots, tubes, posts, reserve };
   let phase = 'pre';
@@ -726,9 +726,21 @@ export function createSim(options = {}) {
         }
         t.moving = true;
       } else if (t.state === 'floor' || t.state === 'chute') {
-        t.x += t.vx * dt; t.z += t.vz * dt; t.y = TR;
-        if (t.state === 'chute') { t.chuteT -= dt; if (t.chuteT <= 0) t.state = 'floor'; }
-        else {
+        t.x += t.vx * dt; t.z += t.vz * dt;
+        if (t.state === 'chute') {
+          // Inflatable tube out of the chute: drops from the exit, bounces a little, tips over and settles flat.
+          t.vy = (t.vy || 0) - 9.81 * dt; t.y += t.vy * dt; t.chuteT -= dt;
+          const gy = TR + (t.tilt || 0) * (TUBE.outerRadius - TR);         // an upright ring rests on its rim
+          const grounded = t.y <= gy + 1e-4;
+          if (grounded) {
+            t.y = gy;
+            if (t.vy < -0.7) { t.vy *= -0.35; t.vx *= 0.8; t.vz *= 0.8; } else t.vy = 0;
+            t.tilt = Math.max(0, (t.tilt || 0) - dt / 0.35);                 // falls over onto its side
+            const sp = Math.hypot(t.vx, t.vz); if (sp > 0) { const f = Math.max(0, 1 - 2.2 * dt); t.vx *= f; t.vz *= f; }
+          }
+          if ((grounded && t.vy === 0 && t.tilt <= 0) || t.chuteT <= 0) { t.state = 'floor'; t.tilt = 0; t.vy = 0; t.y = TR; }
+        } else {
+          t.y = TR;
           const sp = Math.hypot(t.vx, t.vz);
           if (sp > 0) { const f = sp <= crr ? 0 : fric * (1 - crr / sp); t.vx *= f; t.vz *= f; }
         }
@@ -793,8 +805,10 @@ export function createSim(options = {}) {
   function feed(h, cd) {
     const p = chuteSpawn(h);
     const t = newTube(h.alliance, p.x, p.z, 'chute');
-    t.vx = h.c.dirX * TUNE.chuteSpeed; t.vz = h.c.dirZ * TUNE.chuteSpeed; t.chuteT = TUNE.chuteTime; t.spin = (rnd() - 0.5) * 3;
+    t.vx = h.c.dirX * TUNE.chuteSpeed; t.vz = h.c.dirZ * TUNE.chuteSpeed; t.chuteT = TUNE.chuteTime; t.spin = (rnd() - 0.5) * 1.5;
+    t.y = Math.max(TUNE.chuteExitY, TUBE.outerRadius + 0.05); t.vy = 0.2; t.tilt = 1;   // leaves the chute upright
     reserve[h.alliance]--; h.cd = cd;
+    for (const o of chutes) if (o !== h && o.alliance === h.alliance) o.cd = Math.max(o.cd, TUNE.chuteStagger); // one tube at a time per alliance
     emit({ type: 'feed', tubeId: t.id, text: `${h.alliance} chute ${h.index}` });
     return true;
   }
@@ -814,7 +828,7 @@ export function createSim(options = {}) {
       const k = rt.get(r.id), raw = disabled ? ZERO : inputs?.[r.id] ?? ZERO;
       const inp = { moveX: num(raw.moveX), moveZ: num(raw.moveZ), rotate: num(raw.rotate), throttle: num(raw.throttle), turn: num(raw.turn) };
       const climbing = r.action?.type === 'climb';
-      r.liftTier = raw.liftTier === 'upper' || raw.liftTier === 'lower' ? raw.liftTier : null;
+      r.liftTier = !raw.intake && (raw.liftTier === 'upper' || raw.liftTier === 'lower') ? raw.liftTier : null; // intake forces the lift down
       if (edges && !disabled && !climbing) {
         const idle = !r.action || r.action.type === 'intake';
         if (idle) {

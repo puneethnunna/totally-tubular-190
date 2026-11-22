@@ -435,3 +435,21 @@ console.log('sim tests passed');
   ({ s, r } = mkc(0, 0.0)); for (let i = 0; i < 20; i++) s.step(dt, { 'blue-0': { climb: true } }, 'teleop'); assert.ok(!r.action, 'no climb outside endgame');
   console.log('direct climb ok');
 }
+
+// ---------- human-player chute: one tube at a time, bounces, settles flat, never sinks ----------
+{
+  const s = createSim({ robots: [{ id: 'blue-0', alliance: 'blue', slot: 0, number: '1', preset: 'stacker' }], midfield: { blue: 0, red: 0 }, autoHumanPlayer: true });
+  const feeds = { blue: [], red: [] }, born = new Map();
+  for (let i = 0; i < 120 * 10; i++) {
+    s.step(1 / 120, {}, 'teleop');
+    for (const e of s.drainEvents()) if (e.type === 'feed') { feeds[e.text.split(' ')[0]].push(s.state.time); born.set(e.tubeId, s.state.time); }
+    for (const t of s.state.tubes) {
+      if (t.state === 'chute') assert.ok(t.y >= 0.0635 - 1e-6 + (t.tilt || 0) * (0.279 - 0.0635) - 1e-3, 'chute tube rests on its rim, never sinks');
+      if (t.state === 'chute' && born.has(t.id)) assert.ok(s.state.time - born.get(t.id) < 2.05, 'chute tube settles flat within 2 s');
+      if (t.state === 'floor') assert.ok(Math.abs(t.y - 0.0635) < 1e-6, 'floor tube lies flat');
+    }
+  }
+  for (const a of ['blue', 'red']) for (let k = 1; k < feeds[a].length; k++) assert.ok(feeds[a][k] - feeds[a][k - 1] >= 1.1, `${a} human player feeds one tube at a time`);
+  assert.ok(feeds.blue.length >= 3, 'human player keeps feeding');
+  console.log('chute ok', feeds.blue.length, 'feeds');
+}

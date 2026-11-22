@@ -204,6 +204,7 @@ function frame(t) {
       }
       if (game.carry[q.id]) { for (const k of ACT_EDGES) if (game.carry[q.id][k]) i[k] = true; game.carry[q.id] = null; } // an edge from a frame that ran no sim step
       if (i.stow) { game.stow[q.id] = t + 450; game.armed[ai] = null; ui.toast('Arm stowed', { tag: 'E', alliance: q.alliance }); }
+      if (i.intake && game.armed[ai]) game.armed[ai] = null;   // intake always brings the elevator back down to take tubes
       i.liftTier = game.armed[ai];   // elevator holds the chosen height (sim.js -> models.js)
       if (t < (game.stow[q.id] || 0)) i.intake = false;
       frameIn[q.id] = i;
