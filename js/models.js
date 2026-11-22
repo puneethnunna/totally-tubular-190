@@ -304,14 +304,23 @@ function createLift(body, cfg) {
       const c = Math.cos(rs.heading), s = Math.sin(rs.heading), dx = post.tipX - rs.x, dz = post.z - rs.z;
       const f = dx * c + dz * s, l = -dx * s + dz * c;
       const Eapp = Math.min(Math.max(f - LIFT.APPROACH - xA0, 0), LIFT.EMAX), Efin = Math.min(Math.max(f + LIFT.FINAL - xA0, 0), LIFT.EMAX + 0.1);
-      const Ht = post.y - (rs.y || 0) - LIFT.PRONG_DY, d = Math.max(0.1, a.duration), u = Math.min(1, a.t / d);
-      const slideT = Math.min(LIFT.SLIDE, d * 0.27), tr = a.t - 0.7 * d;          // seconds since release
+      // Release times come from the sim (action.releases): one for a single place, two for a double place. The lift stays at post
+      // height with the claw out until the LAST tube is on the peg, then falls through to the retract / lower branch below.
+      const Ht = post.y - (rs.y || 0) - LIFT.PRONG_DY, d = Math.max(0.1, a.duration), dn = Math.max(0.1, a.normal || d), u = Math.min(1, a.t / dn);
+      const rel = a.releases && a.releases.length ? a.releases : [0.7 * d], last = rel[rel.length - 1];
+      const slideT = Math.min(LIFT.SLIDE, dn * 0.27), tr = a.t - last;           // seconds since the last release
       S.slideT = slideT;
       if (tr < slideT + 0.001) {
         direct = true;
-        const e1 = ease((u - 0.16) / 0.54), sl = ease(tr / slideT);
+        const e1 = ease((u - 0.16) / 0.54);
+        let i = rel.length - 1; while (i >= 0 && a.t < rel[i]) i--;
+        if (i < 0) S.E = Eapp * e1;
+        else if (a.t < rel[i] + slideT) S.E = Eapp + (Efin - Eapp) * ease((a.t - rel[i]) / slideT);   // claw pushes tube i+1 onto the peg
+        else {                                                                                       // between releases: draw back to load the next tube
+          const gap = Math.max(0.05, (rel[i + 1] ?? rel[i] + 1) - rel[i] - 2 * slideT - 0.04);
+          S.E = Efin + (Eapp - Efin) * ease((a.t - rel[i] - slideT) / gap);
+        }
         S.H = S.H0 + (Ht - S.H0) * ease(u / 0.5);
-        S.E = Eapp * e1 + (Efin - Eapp) * sl;
         S.Z = Math.max(-0.3, Math.min(0.3, l)) * e1;
         S.blend = e1;
       }

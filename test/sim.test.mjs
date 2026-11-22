@@ -391,10 +391,14 @@ console.log('sim tests passed');
   const normal = b.preset.placeTime + 0.15 + Math.max(0, po.y - (b.y || 0) - 0.45) / 2.2;
   assert.ok(b.action && b.action.type === 'place', 'double place started');
   assert.ok(Math.abs(b.action.duration - (normal + 0.5)) < 1e-9, 'duration is normal + 0.5: ' + b.action.duration + ' vs ' + normal);
+  const rel = b.action.releases;
+  assert.equal(rel.length, 2, 'double exposes two release times'); assert.ok(b.action.double && rel[1] > rel[0] + 0.3 && rel[1] < b.action.duration);
+  assert.ok(Math.abs(rel[0] - 0.7 * b.action.normal) < 1e-9, 'first release at 0.7 x normal');
   let places = [];
   for (let i = 0; i < 600 && b.action; i++) { s.step(dt, {}, 'teleop'); for (const e of s.drainEvents()) if (e.type === 'place') places.push({ ...e, at: i * dt }); }
   assert.equal(places.length, 2, 'one place event per tube');
   assert.ok(places[1].at - places[0].at > 0.3, 'second tube goes on later');
+  for (let i = 0; i < 2; i++) assert.ok(Math.abs(places[i].at - rel[i]) < 0.06, 'event ' + i + ' at release time ' + places[i].at + ' vs ' + rel[i]);
   assert.equal(po.tubes.length, 2); assert.equal(b.held.length, 0);
   const stk = po.tubes.map((id) => s.tubeById(id));
   assert.notEqual(stk[0].x, po.tipX); assert.equal(stk[1].x, po.tipX, 'newest at the tip');
@@ -405,10 +409,29 @@ console.log('sim tests passed');
   // post already has 2 -> only one tube, normal duration
   ({ s, b, po } = setup2(2)); s.step(dt, { 'blue-0': { scoreUpper: true } }, 'teleop');
   assert.ok(Math.abs(b.action.duration - normal) < 1e-9, 'single duration is normal');
+  assert.deepEqual(b.action.releases, [0.7 * normal], 'single has one release'); assert.ok(!b.action.double);
   for (let i = 0; i < 600 && b.action; i++) s.step(dt, {}, 'teleop');
   assert.equal(po.tubes.length, 3); assert.equal(b.held.length, 1, 'one tube still held');
   // holding only one tube -> normal duration, one tube
   ({ s, b, po } = setup2(0)); const x = s.tubeById(b.held[1]); b.held.pop(); x.state = 'floor'; x.holder = null;
   s.step(dt, { 'blue-0': { scoreUpper: true } }, 'teleop'); assert.ok(Math.abs(b.action.duration - normal) < 1e-9);
   console.log('double place ok');
+}
+
+// --- direct climbs from the carpet, scaled duration, maxClimb limit
+{
+  const mkc = (idx, x) => { const s = mk(), r = s.state.robots[idx]; Object.assign(r, { x, z: -2.0, heading: -Math.PI / 2, vx: 0, vz: 0 }); s.step(dt, {}, 'endgame'); return { s, r }; };
+  const run = (s, id, n = 400) => { let tDone = null; for (let i = 0; i < n; i++) { s.step(dt, { [id]: { climb: true, moveZ: -0.2 } }, 'endgame'); if (tDone === null && !s.state.robots.find((q) => q.id === id).action && s.state.robots.find((q) => q.id === id).support >= 2) tDone = i * dt; } return tDone; };
+  let { s, r } = mkc(2, 1.2); // climber maxClimb 4, in front of L4 (x 0.61..1.83)
+  s.step(dt, { 'blue-2': { climb: true, moveZ: -0.2 } }, 'endgame');
+  const ct = r.preset.climbTime; assert.ok(r.action?.type === 'climb' && Math.abs(r.action.duration - ct * 1.8) < 1e-9, 'L4 from carpet takes climbTime*(0.6+0.4*3): ' + r.action?.duration);
+  run(s, 'blue-2'); assert.equal(r.support, 4, 'direct L4'); assert.equal(r.y, SIDES.blue.platforms[2].height);
+  ({ s, r } = mkc(0, 0.0)); // stacker maxClimb 3, in front of L3
+  s.step(dt, { 'blue-0': { climb: true, moveZ: -0.2 } }, 'endgame');
+  assert.ok(Math.abs(r.action.duration - r.preset.climbTime * 1.4) < 1e-9, 'L3 direct duration');
+  run(s, 'blue-0'); assert.equal(r.support, 3, 'direct L3');
+  ({ s, r } = mkc(0, -1.2)); run(s, 'blue-0'); assert.equal(r.support, 2, 'L2 still works');
+  ({ s, r } = mkc(0, 1.2)); run(s, 'blue-0'); assert.ok(r.support < 2 && !r.action, 'stacker (max 3) cannot climb L4 ' + r.support + ' ' + r.action?.type + ' ' + r.y + ' x' + r.x); // maxClimb limit
+  ({ s, r } = mkc(0, 0.0)); for (let i = 0; i < 20; i++) s.step(dt, { 'blue-0': { climb: true } }, 'teleop'); assert.ok(!r.action, 'no climb outside endgame');
+  console.log('direct climb ok');
 }

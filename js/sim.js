@@ -269,6 +269,7 @@ export function createSim(options = {}) {
     r.action = { type: 'place', t: 0, duration: double ? normal + TUNE.doubleExtra : normal, target: p.id };
     if (double) Object.assign(r.action, { double: true, normal, rel: 0, t1: TUNE.releaseAt * normal });
     if (double) r.action.t2 = Math.max(r.action.t1 + 0.3, r.action.duration - 0.15);
+    r.action.releases = double ? [r.action.t1, r.action.t2] : [TUNE.releaseAt * normal]; // shared with models.js lift animation
     r.armTier = tier; k.released = false;
   }
 
@@ -327,18 +328,18 @@ export function createSim(options = {}) {
   }
 
   function findClimbTarget(r, k) {
-    const need = Math.max(r.support, 1) + 1;
-    if (need > r.preset.maxClimb) return null;
-    const c = Math.cos(r.heading), s = Math.sin(r.heading);
+    // Direct climb: whichever platform the robot is touching and facing (any level above its support; refused if that platform is above maxClimb); the one the robot's center is nearest wins.
+    const have = Math.max(r.support, 1);
+    let best = null, bd = 1e9;
     for (const q of platforms) {
-      if (q.alliance !== r.alliance || q.level !== need) continue;
+      if (q.alliance !== r.alliance || q.level <= have) continue;
       const px = clamp(r.x, q.x0, q.x1), pz = clamp(r.z, q.z0, q.z1);
       const dx = px - r.x, dz = pz - r.z, d = Math.hypot(dx, dz);
       closest(sh(r), px, pz); if (Math.hypot(_cp[0] - px, _cp[1] - pz) - r.bumper.corner > TUNE.climbTouch) continue; // bumper-to-platform gap
       if (d > 1e-6 && Math.abs(wrap(Math.atan2(dz, dx) - r.heading)) > TUNE.climbAngle) continue;
-      return q;
+      if (d < bd - 1e-6 || (Math.abs(d - bd) <= 1e-6 && q.level > best.level)) { best = q; bd = d; }
     }
-    return null;
+    return best && best.level <= r.preset.maxClimb ? best : null; // lined up with a platform above maxClimb: no fallback to a neighbour
   }
 
   function startClimb(r, k) {
@@ -347,7 +348,8 @@ export function createSim(options = {}) {
     const S = sh(r), tx = clampIn(r.x, q.x0 + S.ex, q.x1 - S.ex), tz = clampIn(r.z, q.z0 + S.ez, q.z1 - S.ez);
     const open = q.z1 < 0 ? q.z1 : q.z0; // open edge faces field center
     const cz = q.z1 < 0 ? Math.min(tz, open - S.ez) : Math.max(tz, open + S.ez);
-    r.action = { type: 'climb', t: 0, duration: r.preset.climbTime, target: q.id };
+    const gained = q.level - Math.max(r.support, 1); // taller direct climbs take longer
+    r.action = { type: 'climb', t: 0, duration: r.preset.climbTime * (0.6 + 0.4 * gained), target: q.id };
     k.act = { q, fx: r.x, fz: r.z, fy: r.y, tx, tz: cz };
     r.armTier = 'stow';
     emit({ type: 'climb', robotId: r.id, text: `start L${q.level}` });

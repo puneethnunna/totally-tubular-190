@@ -333,7 +333,8 @@ const turnTo = (me, ang) => clamp((wrap(ang - me.heading) * 12 - me.omega * 0.4)
       return park(wallDir * [1.3, 0.3, 0.3][Math.max(0, i)], l1z);
     }
     if (sup <= 1) {
-      const A = { x: (L2.x0 + L2.x1) / 2, z: zf - faceZ * (c.R + 0.1) };
+      const PT = side.platforms[Math.max(0, tgt - 2)] || L2; // direct climb: line up with the target level's platform from the carpet
+      const A = { x: (PT.x0 + PT.x1) / 2, z: zf - faceZ * (c.R + 0.1) };
       const higher = mates.filter((r) => lvl[r.id] > tgt);
       if (c.remaining > 8 && !higher.every((r) => r.support >= 3)) {
         return park(wallDir * 2.2, faceZ * 0.8);
