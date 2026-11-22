@@ -321,7 +321,7 @@ function createLift(body, cfg) {
           S.E = Efin + (Eapp - Efin) * ease((a.t - rel[i] - slideT) / gap);
         }
         S.H = S.H0 + (Ht - S.H0) * ease(u / 0.5);
-        S.Z = Math.max(-0.3, Math.min(0.3, l)) * e1;
+        S.Z = Math.max(-0.05, Math.min(0.05, l)) * e1;
         S.blend = e1;
       }
     }

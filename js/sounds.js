@@ -85,8 +85,22 @@ export function createSounds() {
     },
     // Long match-end buzzer
     matchEnd(t) { buzzer(196, t, 2.4, 0.3); },
+    // Robot one-shots: bumper hit, tube onto a peg, intake grab
+    thud(t) { noise(t, 0.12, 0.22, 160); tone(70, t, 0.1, 'sine', 0.2, { attack: 0.003, release: 0.08 }); },
+    clack(t) { noise(t, 0.05, 0.12, 2600); tone(520, t, 0.05, 'triangle', 0.06, { attack: 0.002, release: 0.04 }); },
+    grab(t) { noise(t, 0.09, 0.08, 900); },
   };
   SOUNDS.start = SOUNDS.autoStart;
+
+  // Continuous robot voices (player robot): swerve/drive motor whine rising with speed, intake roller buzz, elevator hum.
+  let voices = null;
+  function voice(type, lp) {
+    const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    o.type = type; f.type = 'lowpass'; f.frequency.value = lp; g.gain.value = 0;
+    o.connect(f); f.connect(g); g.connect(master); o.start();
+    return { o, f, g };
+  }
+  function setV(v, freq, gain, t) { v.o.frequency.setTargetAtTime(freq, t, 0.05); v.g.gain.setTargetAtTime(gain, t, 0.06); }
 
   return {
     play(name) {
@@ -98,6 +112,19 @@ export function createSounds() {
         return true;
       } catch (e) { return false; }
     },
+    // speed 0..1 (fraction of top speed), turn 0..1, intake bool, lift 0..1 (elevator speed)
+    robot({ speed = 0, turn = 0, intake = false, lift = 0 } = {}) {
+      try {
+        if (volume <= 0 || !unlocked || !ensure()) return;
+        if (!voices) voices = { a: voice('sawtooth', 900), b: voice('sawtooth', 700), roll: voice('square', 500), lift: voice('triangle', 800) };
+        const t = ctx.currentTime, m = Math.min(1, Math.max(speed, turn * 0.7));
+        setV(voices.a, 90 + 620 * m, 0.035 * Math.min(1, m * 1.6), t);
+        setV(voices.b, 92.5 + 640 * m, 0.025 * Math.min(1, m * 1.6), t);
+        setV(voices.roll, 140, intake ? 0.03 : 0, t);
+        setV(voices.lift, 210 + 260 * lift, lift > 0.05 ? 0.035 * Math.min(1, lift * 2) : 0, t);
+      } catch (e) { /* audio is optional */ }
+    },
+    silence() { try { if (voices) for (const v of Object.values(voices)) v.g.gain.setTargetAtTime(0, ctx.currentTime, 0.05); } catch (e) { /* ignore */ } },
     setVolume(v) {
       volume = Math.min(1, Math.max(0, Number.isFinite(+v) ? +v : 0));
       try { if (master) master.gain.value = volume * 0.8; } catch (e) { /* ignore */ }

@@ -31,6 +31,8 @@ function play(mode, diff = 'hard', verbose = false) {
       if (t.state === 'chute') assert.ok(t.y - 0.2155 * Math.sin((t.tilt || 0) * Math.PI / 2) >= 0.0635 - 1e-3, `${mode}: chute tube sank`);
       if (t.state === 'floor' && t._wasChuteTilt > 0.05) assert.fail(`${mode}: chute tube snapped flat`);
       t._wasChuteTilt = t.state === 'chute' ? t.tilt || 0 : 0;
+      if ((t.state === 'floor' || t.state === 'chute') && t._px !== undefined && t._ps === t.state) assert.ok(Math.hypot(t.x - t._px, t.z - t._pz) < 0.1, `${mode}: tube ${t.id} jumped ${Math.hypot(t.x - t._px, t.z - t._pz).toFixed(2)} m in one step`);
+      t._px = t.x; t._pz = t.z; t._ps = t.state;
     }
     for (const [i, r] of sim.state.robots.entries()) {
       const sk = stuck[r.id], bs = bots[robots.findIndex((x) => x.id === r.id)].state; // commanding motion but barely moving, not placing/climbing

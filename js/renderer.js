@@ -10,7 +10,7 @@ const MAX_TUBES = 216;
 // Measured from the CAD's station dividers (blue end: dividers at z = -1.70, 0.14, 2.0, 3.84; red is the (x,z) mirror).
 export const DRIVER_Z = { blue: [-0.78, 1.07, 2.92], red: [0.78, -1.07, -2.92] };
 export const CAM = {
-  driver: { dist: 2.6, eye: 4.4, fov: 60 },          // eye at x = -+(8.75 + dist), looking at (0, 0.5, 0)
+  driver: { dist: 0.4, eye: 1.75, fov: 62 },       // standing just behind the alliance wall at eye height, like frsim          // eye at x = -+(8.75 + dist), looking at (0, 0.5, 0)
   third: { back: 3.4, up: 4.2, lookAhead: 2.4, lookY: 0.2, fov: 60 },
   first: { fwd: 0.3, up: 0.75, pitch: 0.15, fov: 75 }, // pitch rad (~8.5 deg) downward
   top: { fov: 50 },
@@ -85,7 +85,21 @@ export function createRenderer(canvas) {
   };
   const Y = new THREE.Vector3(0, 1, 0), XAX = new THREE.Vector3(1, 0, 0), v3 = new THREE.Vector3(), ONE = new THREE.Vector3(1, 1, 1), ZERO3 = new THREE.Vector3(1e-4, 1e-4, 1e-4), m4 = new THREE.Matrix4();
 
+  // Driver view looks through the player's own driver-station panel (it is 2.7 m tall in the CAD), like a real driver over the wall.
+  let ghosted = null;
+  function ghostStation(a) {
+    if (ghosted === a) return;
+    const mats = field.cad?.userData?.mats; if (!mats) return;
+    for (const al of ['blue', 'red']) {
+      const m = mats['station-' + al]; if (!m) continue;
+      if (!m.userData.base) m.userData.base = { opacity: m.opacity, transparent: m.transparent, depthWrite: m.depthWrite };
+      const g = al === a, b = m.userData.base;
+      m.transparent = g || b.transparent; m.opacity = g ? 0.16 : b.opacity; m.depthWrite = g ? false : b.depthWrite; m.needsUpdate = true;
+    }
+    ghosted = a;
+  }
   function setCameraMode(m, a = alliance, robotId = null, opts = {}) {
+    if (m !== 'driver') ghostStation(null);
     if (m === 'chase') m = 'third';
     mode = m; alliance = a; playerId = robotId;
     slot = Math.max(0, Math.min(2, (opts && opts.slot) | 0));
@@ -159,7 +173,8 @@ export function createRenderer(canvas) {
       return;
     }
     const d = CAM.driver, sx = SIDES[alliance].driverStationX < 0 ? -1 : 1;   // fixed station behind the alliance wall
-    tp.set(sx * (8.75 + d.dist), d.eye, DRIVER_Z[alliance][slot]); tl.set(0, 0.5, 0);
+    tp.set(sx * (8.75 + d.dist), d.eye, DRIVER_Z[alliance][slot]); tl.set(0, 0.35, 0);
+    ghostStation(mode === 'driver' ? alliance : null);
     fovTarget = d.fov; fovRate = 6; trackRobot = false;
     const tr = (driverTracking && mode === 'driver') ? find(sim) : null;
     if (tr) {

@@ -767,6 +767,7 @@ export function createSim(options = {}) {
         act.push(t);
       }
     }
+    for (const t of act) { t.cx0 = t.x; t.cz0 = t.z; }   // where integration left it, before contact push-out
     // tube-tube (2 iterations) + robots + walls
     for (let it = 0; it < 2; it++) {
       grid.clear();
@@ -804,12 +805,16 @@ export function createSim(options = {}) {
         if (t.state === 'chute' && t.tilt > 0) { const dv = Math.hypot(t.vx - ux, t.vz - uz); if (dv > 0.05) t.tiltW = Math.min(t.tiltW || 0, -Math.min(4, 3 * dv)); } // a bump knocks an upright tube over
       }
     }
+    for (const t of act) { // a tube wedged between robots/walls/tubes is eased out, never teleported across the field
+      const cx = t.x - t.cx0, cz = t.z - t.cz0, cd = Math.hypot(cx, cz), CMAX = 0.03;
+      if (cd > CMAX) { t.x = t.cx0 + cx * (CMAX / cd); t.z = t.cz0 + cz * (CMAX / cd); tubeWalls(t); }
+    }
     for (const t of act) {
       const sp = t.vx * t.vx + t.vz * t.vz;
       if (sp < 0.0016 && t.state === 'floor') { t.vx = t.vz = 0; t.moving = false; if (phase === 'auto') t.placedInAuto = true; }
       else { t.moving = true; t.placedInAuto = false; }
       if (!Number.isFinite(t.x + t.z)) { t.x = 0; t.z = 0; t.vx = t.vz = 0; }
-      else if (sp > 144) { const f = 12 / Math.sqrt(sp); t.vx *= f; t.vz *= f; }
+      else if (sp > 64) { const f = 8 / Math.sqrt(sp); t.vx *= f; t.vz *= f; }
     }
   }
 

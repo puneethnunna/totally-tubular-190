@@ -121,6 +121,21 @@ function foulToast(f) {
   const t = f.type === 'tech' ? 'TECH FOUL' : f.type === 'foul' ? 'FOUL' : 'WARNING';
   ui.toast(`${t} on ${String(f.against).toUpperCase()}${f.text ? ' — ' + f.text : ''}`, { tag: f.rule, foul: true, alliance: f.against });
 }
+// Player robot audio: motor whine from speed, intake roller, elevator hum; thuds and clacks from sim events.
+let liftPrev = null, thudT = 0;
+function robotSounds(ev, dt) {
+  const q = game.p[0], r = q && robotOf(q.id); if (!r) return;
+  const sp = Math.hypot(r.vx, r.vz) / (r.preset.maxSpeed || 4), H = renderer.models?.get?.(r.id)?.model?.lift?.H;
+  const lift = H != null && liftPrev != null && dt > 0 ? Math.min(1, Math.abs(H - liftPrev) / dt / 2) : 0; liftPrev = H ?? null;
+  sounds.robot({ speed: Math.min(1, sp), turn: Math.min(1, Math.abs(r.omega || 0) / 5), intake: !!r.intakeOn, lift });
+  const now = performance.now();
+  for (const e of ev) {
+    const mine = game.p.some((p) => p.id === e.robotId);
+    if (e.type === 'contact' && mine && now - thudT > 250) { thudT = now; sounds.play('thud'); }
+    else if (e.type === 'place' && mine) sounds.play('clack');
+    else if (e.type === 'pickup' && mine) sounds.play('grab');
+  }
+}
 function eventToast(e) {
   const r = e.robotId && robotOf(e.robotId), human = game.p.some((q) => q.id === e.robotId);
   if (!human && e.type !== 'climb') return;
@@ -186,12 +201,13 @@ function frame(t) {
           // anywhere else (or if auto-align can't start) the tube is shot out from the raised elevator.
           const plan = planPlace({ robot: r, preset: pr, armed, posts: SIDES[q.alliance].posts, tune: sim.tune });
           const inZone = inScoringZone(r);
-          if (plan.act && plan.act !== 'scoreFloor') i[plan.act] = true;
-          else if (inZone && settings.autoAlign !== false) {
+          const aaOn = settings.autoAlign !== false;
+          if (inZone && aaOn) {   // auto-align always drives the robot square onto the post; the arm only does the placing
             const res = aa.start(sim, q.id, armed);
             if (res.ok) { justStarted = true; ui.toast(`Auto-align → ${res.target}`, { tag: '⌖', alliance: q.alliance }); }
             else { i.scoreFloor = true; ui.toast(`${res.reason} — tube shot out`, { tag: '!', alliance: q.alliance }); }
-          } else i.scoreFloor = true;
+          } else if (plan.act && plan.act !== 'scoreFloor') i[plan.act] = true;   // auto-align off: place if a post is in reach
+          else i.scoreFloor = true;
         }
       }
       if (aa.active && !i.place) {
@@ -226,6 +242,7 @@ function frame(t) {
     const ev = sim.drainEvents?.() || [];
     match.fouls?.onEvents?.(ev);
     ev.forEach(eventToast);
+    robotSounds(ev, dt);
     match.fouls?.drainNew?.().forEach(foulToast);
     if (match.phase !== game.phase) { game.phase = match.phase; syncVolume(); if (PHASE_SND[match.phase]) sounds.play(PHASE_SND[match.phase]); if (PHASE_MSG[match.phase]) ui.toast(PHASE_MSG[match.phase], { tag: '●' }); }
     if (match.phase === 'done' && game.state === 'run') {
@@ -234,6 +251,7 @@ function frame(t) {
       ui.showResults(match.final || score || {}, match.fouls?.list || []);
     }
   }
+  if (!game || game.state !== 'run' || paused) sounds.silence();
   renderer.render(sim);
   if (t - hudT > 100) {
     hudT = t;
