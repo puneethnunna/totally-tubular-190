@@ -306,10 +306,10 @@ const turnTo = (me, ang) => clamp((wrap(ang - me.heading) * 12 - me.omega * 0.4)
   }
 
   // ---------- endgame ----------
-  function levels(S) { // planned platform level per teammate: strongest climber takes the highest
-    const mates = S.robots.filter((r) => r.alliance === alliance).sort((a, b) => b.preset.maxClimb - a.preset.maxClimb || a.slot - b.slot), lvl = {};
+  function levels(S) { // planned platform level per teammate: fastest climber takes the highest, the others the next boxes down
+    const mates = S.robots.filter((r) => r.alliance === alliance).sort((a, b) => (a.preset.climbTime ?? 1) - (b.preset.climbTime ?? 1) || a.slot - b.slot), lvl = {};
     let cap = 4;
-    for (const r of mates) { lvl[r.id] = Math.max(1, Math.min(r.preset.maxClimb, cap)); cap = Math.max(1, lvl[r.id] - 1); }
+    for (const r of mates) { lvl[r.id] = Math.max(1, Math.min(4, cap)); cap = Math.max(1, lvl[r.id] - 1); }
     return { mates, lvl };
   }
 

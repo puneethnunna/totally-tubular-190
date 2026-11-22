@@ -67,7 +67,7 @@ cl.heading = 0;
 for (let i = 0; i < 300; i++) sim.step(dt, { 'blue-0': { climb: true, moveX: 0.3 } }, 'endgame');
 assert.equal(cl.support, 3, 'climbed L3 ' + cl.x);
 for (let i = 0; i < 300; i++) sim.step(dt, { 'blue-0': { climb: true, moveX: 0.3 } }, 'endgame');
-assert.equal(cl.support, 3, 'stacker cannot reach L4');
+assert.equal(cl.support, 4, 'any robot steps on up to L4');
 for (let i = 0; i < 300; i++) sim.step(dt, { 'blue-0': { moveZ: 1 } }, 'endgame');
 assert.ok(cl.support < 2 && cl.y === 0, 'drove off');
 
@@ -431,7 +431,7 @@ console.log('sim tests passed');
   assert.ok(Math.abs(r.action.duration - r.preset.climbTime * 1.4) < 1e-9, 'L3 direct duration');
   run(s, 'blue-0'); assert.equal(r.support, 3, 'direct L3');
   ({ s, r } = mkc(0, -1.2)); run(s, 'blue-0'); assert.equal(r.support, 2, 'L2 still works');
-  ({ s, r } = mkc(0, 1.2)); run(s, 'blue-0'); assert.ok(r.support < 2 && !r.action, 'stacker (max 3) cannot climb L4 ' + r.support + ' ' + r.action?.type + ' ' + r.y + ' x' + r.x); // maxClimb limit
+  ({ s, r } = mkc(0, 1.2)); run(s, 'blue-0'); assert.equal(r.support, 4, 'any robot can climb L4');
   ({ s, r } = mkc(0, 0.0)); for (let i = 0; i < 20; i++) s.step(dt, { 'blue-0': { climb: true } }, 'teleop'); assert.ok(!r.action, 'no climb outside endgame');
   console.log('direct climb ok');
 }

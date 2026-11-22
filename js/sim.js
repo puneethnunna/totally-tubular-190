@@ -328,7 +328,7 @@ export function createSim(options = {}) {
   }
 
   function findClimbTarget(r, k) {
-    // Direct climb: whichever platform the robot is touching and facing (any level above its support; refused if that platform is above maxClimb); the one the robot's center is nearest wins.
+    // Direct climb: whichever platform the robot is touching and facing (any level above its support); the one the robot's center is nearest wins.
     const have = Math.max(r.support, 1);
     let best = null, bd = 1e9;
     for (const q of platforms) {
@@ -339,10 +339,7 @@ export function createSim(options = {}) {
       if (d > 1e-6 && Math.abs(wrap(Math.atan2(dz, dx) - r.heading)) > TUNE.climbAngle) continue;
       if (d < bd - 1e-6 || (Math.abs(d - bd) <= 1e-6 && q.level > best.level)) { best = q; bd = d; }
     }
-    if (best && best.level > r.preset.maxClimb) { // lined up with a platform above maxClimb: no fallback to a neighbour, but say why
-      if (!(k.climbMsgT > state.time)) { k.climbMsgT = state.time + 2; emit({ type: 'invalid', robotId: r.id, text: `This robot can only climb to LEVEL ${r.preset.maxClimb}` }); }
-      return null;
-    }
+    // Every robot can climb every platform (LEVEL 2-4).
     return best;
   }
 

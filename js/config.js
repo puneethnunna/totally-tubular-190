@@ -141,16 +141,16 @@ export const midline = 0; // x = 0 is center field
 // Playable robot designs. `capabilities` drives sim + AI behaviour.
 export const ROBOT_PRESETS = [
   { id: 'stacker', name: 'Swerve Stacker', drive: 'swerve', maxSpeed: 4.2, accel: 9, turnRate: 4.5,
-    canLower: true, canUpper: true, canLaunch: false, maxClimb: 3, intakeTime: 0.25, placeTime: 0.7, climbTime: 1.2,
+    canLower: true, canUpper: true, canLaunch: false, maxClimb: 4, intakeTime: 0.25, placeTime: 0.7, climbTime: 1.2,
     blurb: 'Elevator + hook arm. Reaches both post tiers. Climbs to LEVEL 3.' },
   { id: 'tosser', name: 'Tank Tosser', drive: 'tank', maxSpeed: 4.6, accel: 10, turnRate: 3.8,
-    canLower: true, canUpper: false, canLaunch: true, maxClimb: 2, intakeTime: 0.2, placeTime: 0.6, climbTime: 1.4,
+    canLower: true, canUpper: false, canLaunch: true, maxClimb: 4, intakeTime: 0.2, placeTime: 0.6, climbTime: 1.4,
     blurb: 'Flywheel launcher. Lobs tubes onto posts from inside the SCORING ZONE.' },
   { id: 'climber', name: 'Peak Climber', drive: 'swerve', maxSpeed: 3.6, accel: 7, turnRate: 4.0,
     canLower: true, canUpper: true, canLaunch: false, maxClimb: 4, intakeTime: 0.35, placeTime: 0.9, climbTime: 0.8,
     blurb: 'Slower stacker built for the endgame. The only design that reaches LEVEL 4.' },
   { id: 'sweeper', name: 'Floor Sweeper', drive: 'swerve', maxSpeed: 4.9, accel: 12, turnRate: 5.2,
-    canLower: true, canUpper: false, canLaunch: false, maxClimb: 2, intakeTime: 0.12, placeTime: 0.45, climbTime: 1.0,
+    canLower: true, canUpper: false, canLaunch: false, maxClimb: 4, intakeTime: 0.12, placeTime: 0.45, climbTime: 1.0,
     blurb: 'Fast full-width intake. Floods the LEVEL 1 area and lower posts.' },
 ];
 
