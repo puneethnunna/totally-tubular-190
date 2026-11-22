@@ -376,3 +376,39 @@ for (let i = 0; i < 125 * 120; i++) {
 }
 console.log('fuzz ok', Date.now() - t0, 'ms', JSON.stringify(counts(sim)), 'tubes', sim.state.tubes.length);
 console.log('sim tests passed');
+
+// --- double place: 2 tubes held, post has <= 1 -> both go on, duration + 0.5 s
+{
+  const setup2 = (pre) => {
+    const s = mk(), b = s.state.robots[0], po = s.state.posts.find((q) => q.id === 'blue-upper-2');
+    Object.assign(b, { x: po.tipX - 1.0, z: po.z, heading: 0, vx: 0, vz: 0 });
+    const extra = s.state.tubes.find((q) => q.state === 'floor'); extra.state = 'held'; extra.holder = b.id; b.held.push(extra.id);
+    for (let i = 0; i < pre; i++) { const f = s.state.tubes.find((q) => q.state === 'floor'); f.state = 'post'; f.post = po.id; f.stackIndex = i; po.tubes.push(f.id); }
+    return { s, b, po };
+  };
+  let { s, b, po } = setup2(0);
+  s.drainEvents(); s.step(dt, { 'blue-0': { scoreUpper: true } }, 'teleop');
+  const normal = b.preset.placeTime + 0.15 + Math.max(0, po.y - (b.y || 0) - 0.45) / 2.2;
+  assert.ok(b.action && b.action.type === 'place', 'double place started');
+  assert.ok(Math.abs(b.action.duration - (normal + 0.5)) < 1e-9, 'duration is normal + 0.5: ' + b.action.duration + ' vs ' + normal);
+  let places = [];
+  for (let i = 0; i < 600 && b.action; i++) { s.step(dt, {}, 'teleop'); for (const e of s.drainEvents()) if (e.type === 'place') places.push({ ...e, at: i * dt }); }
+  assert.equal(places.length, 2, 'one place event per tube');
+  assert.ok(places[1].at - places[0].at > 0.3, 'second tube goes on later');
+  assert.equal(po.tubes.length, 2); assert.equal(b.held.length, 0);
+  const stk = po.tubes.map((id) => s.tubeById(id));
+  assert.notEqual(stk[0].x, po.tipX); assert.equal(stk[1].x, po.tipX, 'newest at the tip');
+  // post already has 1 -> still double (ends with 3)
+  ({ s, b, po } = setup2(1)); s.step(dt, { 'blue-0': { scoreUpper: true } }, 'teleop');
+  for (let i = 0; i < 600 && b.action; i++) s.step(dt, {}, 'teleop');
+  assert.equal(po.tubes.length, 3); assert.ok(po.tubes.length <= POINTS.maxPhysicalPerPost);
+  // post already has 2 -> only one tube, normal duration
+  ({ s, b, po } = setup2(2)); s.step(dt, { 'blue-0': { scoreUpper: true } }, 'teleop');
+  assert.ok(Math.abs(b.action.duration - normal) < 1e-9, 'single duration is normal');
+  for (let i = 0; i < 600 && b.action; i++) s.step(dt, {}, 'teleop');
+  assert.equal(po.tubes.length, 3); assert.equal(b.held.length, 1, 'one tube still held');
+  // holding only one tube -> normal duration, one tube
+  ({ s, b, po } = setup2(0)); const x = s.tubeById(b.held[1]); b.held.pop(); x.state = 'floor'; x.holder = null;
+  s.step(dt, { 'blue-0': { scoreUpper: true } }, 'teleop'); assert.ok(Math.abs(b.action.duration - normal) < 1e-9);
+  console.log('double place ok');
+}

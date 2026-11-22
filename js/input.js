@@ -1,5 +1,5 @@
 // Keyboard + Gamepad input, frsim-style bindings remapped to TUBE actions. The top half of this file is pure (no DOM) so node tests can import it.
-// poll(alliance, playerIndex, opts) -> { moveX/moveZ/rotate | throttle/turn, intake, climb, place, drop, tierToggle, requestTube, stow } (edges are one-frame).
+// poll(alliance, playerIndex, opts) -> { moveX/moveZ/rotate | throttle/turn, intake, climb, place, drop, armUpper, armLower, requestTube, stow } (edges are one-frame).
 // Rotation: positive = heading increases (turning toward the robot's right). Call poll once per frame; takeGlobal once per frame.
 import { SIDES } from './config.js';
 
@@ -8,7 +8,7 @@ export const ACTIONS = [
   ['up', 'Drive forward', 'Driving', true], ['down', 'Drive back', 'Driving', true], ['left', 'Strafe left', 'Driving', true], ['right', 'Strafe right', 'Driving', true],
   ['rotL', 'Turn left', 'Driving', true], ['rotR', 'Turn right', 'Driving', true],
   ['sp1', 'Speed 1', 'Driving', false], ['sp2', 'Speed 2', 'Driving', false], ['sp3', 'Speed 3', 'Driving', false],
-  ['intake', 'Intake (hold)', 'Tubes', true], ['place', 'Place tube', 'Tubes', true], ['tier', 'Post tier (auto / upper / lower)', 'Tubes', true],
+  ['intake', 'Intake (hold)', 'Tubes', true], ['upper', 'Arm UPPER tier', 'Tubes', true], ['lower', 'Arm LOWER tier', 'Tubes', true], ['place', 'Score (armed tier, else floor)', 'Tubes', true],
   ['drop', 'Drop tube', 'Tubes', true], ['climb', 'Climb (hold, endgame)', 'Tubes', true], ['tube', 'Request tube (human player)', 'Tubes', true], ['stow', 'Arm stow / cancel', 'Tubes', true],
   ['slot', 'Flip camera', 'Camera', true], ['camera', 'Next camera', 'Camera', true],
   ['pause', 'Pause', 'Game', true], ['restart', 'Restart match', 'Game', true], ['stats', 'Show stats', 'Game', true], ['breakdown', 'Score breakdown', 'Game', true], ['fullscreen', 'Fullscreen', 'Game', true],
@@ -19,21 +19,21 @@ export const ACTION_IDS = ACTIONS.map((a) => a.id);
 export const DEFAULT_KEYS = {
   up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA'], right: ['KeyD'], rotL: ['KeyJ', 'ArrowLeft'], rotR: ['KeyL', 'ArrowRight'],
   sp1: ['Digit1'], sp2: ['Digit2'], sp3: ['Digit3'],
-  intake: ['ShiftLeft', 'KeyF'], place: ['Space', 'KeyH'], tier: ['KeyZ'], drop: ['KeyQ'], climb: ['KeyG'], tube: ['KeyX'], stow: ['KeyE'],
+  intake: ['ShiftLeft', 'KeyF'], place: ['Space', 'KeyH'], upper: ['KeyZ'], lower: ['KeyX'], drop: ['KeyQ'], climb: ['KeyG'], tube: ['KeyT'], stow: ['KeyE'],
   slot: ['KeyV'], camera: ['KeyC'], pause: ['Escape'], restart: ['KeyR'], stats: ['Period'], breakdown: ['KeyB'], fullscreen: ['KeyY'],
 };
 // Gamepad bindings: 'b<N>' = standard-mapping button N, 'a<N>+' / 'a<N>-' = axis N pushed positive / negative, null = unbound.
 export const DEFAULT_PAD = {
   up: 'a1-', down: 'a1+', left: 'a0-', right: 'a0+', rotL: 'a2-', rotR: 'a2+', sp1: null, sp2: null, sp3: null,
-  intake: 'b6', place: 'b7', tier: 'b1', drop: 'b4', climb: 'b3', tube: 'b5', stow: 'b2',
+  intake: 'b6', place: 'b7', upper: 'b3', lower: 'b1', drop: 'b4', climb: 'b5', tube: 'b13', stow: 'b2',
   slot: 'b10', camera: null, pause: 'b8', restart: 'b9', stats: null, breakdown: null, fullscreen: 'b12',
 };
 export const DEFAULT_PADCFG = { device: 'auto', flipAB: false, flipXY: false, deadzone: 12, fine: 0, rumble: 50 };
 // Second human in LOCAL 2P (keyboard) — avoids every P1 global key (C V R B Y . Esc).
 export const K2 = { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], rotL: ['Comma'], rotR: ['Slash'], intake: ['Semicolon'],
-  place: ['Enter'], tier: ['KeyN'], drop: ['Quote'], climb: ['KeyP'], tube: ['KeyO'], stow: ['KeyI'] };
+  place: ['Enter'], upper: ['KeyN'], lower: ['KeyM'], drop: ['Quote'], climb: ['KeyP'], tube: ['KeyO'], stow: ['KeyI'] };
 
-export const CTL_VERSION = 3; // v3: W/S forward/back, A/D strafe, J/L turn (arrows are secondary)
+export const CTL_VERSION = 4; // v4: Y/Z arm UPPER, B/X arm LOWER, RT/Space score (floor if nothing armed); climb RB, request tube D-pad down / T
 export const MAX_CHIPS = 2;
 
 // ---------- labels ----------
@@ -124,11 +124,10 @@ export function migrateControls(saved) {
 }
 
 // ---------- post tier + placing (pure) ----------
-export const TIER_CYCLE = { auto: 'upper', upper: 'lower', lower: 'auto' };
-export const tierLabel = (m) => String(m || 'auto').toUpperCase();
-export function nextTier(mode, canUpper = true) { let n = TIER_CYCLE[mode] || 'auto'; if (n === 'upper' && !canUpper) n = TIER_CYCLE[n]; return n; }
-// AUTO = upper if the robot can place on upper posts, else lower. UPPER / LOWER are explicit.
-export function resolveTier(mode, canUpper, canLower = true) { return mode === 'upper' || mode === 'lower' ? mode : canUpper ? 'upper' : canLower === false ? 'upper' : 'lower'; }
+// Explicit tier choice: 'upper' | 'lower' | null (nothing armed -> the score button drops the tube on the floor). Pressing the armed
+// button again clears it, pressing the other one switches.
+export function armTier(cur, press) { return press === 'upper' || press === 'lower' ? (cur === press ? null : press) : cur ?? null; }
+export const tierLabel = (armed) => (armed === 'upper' || armed === 'lower' ? armed.toUpperCase() : 'FLOOR');
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 // Mirrors sim.js findPost / pickLaunchPost (without the "post full" check — the sim still rejects those).
 export function postInReach(posts, r, tier, t) {
@@ -150,13 +149,12 @@ export function launchTarget(posts, r, t) {
   }
   return null;
 }
-// One "Place" button -> which sim edge to fire. AUTO falls back to the other tier if only that post is in reach.
-export function planPlace({ robot, preset, mode, posts, tune }) {
+// One "Score" button -> which sim edge to fire when auto-align is off. armed null = floor drop. Launchers lob when UPPER is armed.
+export function planPlace({ robot, preset, armed, posts, tune }) {
   if (!robot?.held?.length) return { act: null, why: 'No tube held' };
-  const canUp = !!preset.canUpper, canLow = preset.canLower !== false, pref = resolveTier(mode, canUp, canLow);
-  const order = mode === 'auto' || !mode ? [pref, pref === 'upper' ? 'lower' : 'upper'] : [pref];
-  for (const t of order) if ((t === 'upper' ? canUp : canLow) && postInReach(posts, robot, t, tune)) return { act: t === 'upper' ? 'scoreUpper' : 'scoreLower', tier: t };
-  if (preset.canLaunch && launchTarget(posts, robot, tune)) return { act: 'launch' };
+  if (armed !== 'upper' && armed !== 'lower') return { act: 'scoreFloor', tier: 'floor' };
+  if (armed === 'upper' && preset.canLaunch && launchTarget(posts, robot, tune)) return { act: 'launch', tier: 'upper' };
+  if ((armed === 'upper' ? !!preset.canUpper : preset.canLower !== false) && postInReach(posts, robot, armed, tune)) return { act: armed === 'upper' ? 'scoreUpper' : 'scoreLower', tier: armed };
   return { act: null, why: 'No post in reach' };
 }
 
@@ -233,10 +231,10 @@ export function createInput() {
     const pe = (id) => (pad ? padEdge(pad, id) : false);
     const out = {
       intake: held('intake', pi) || pv('intake') > 0.5, climb: held('climb', pi) || pv('climb') > 0.5,
-      place: tap('place', pi) | pe('place'), drop: tap('drop', pi) | pe('drop'), tierToggle: tap('tier', pi) | pe('tier'),
+      place: tap('place', pi) | pe('place'), drop: tap('drop', pi) | pe('drop'), armUpper: tap('upper', pi) | pe('upper'), armLower: tap('lower', pi) | pe('lower'),
       requestTube: tap('tube', pi) | pe('tube'), stow: tap('stow', pi) | pe('stow'),
     };
-    for (const k of ['place', 'drop', 'tierToggle', 'requestTube', 'stow']) out[k] = !!out[k];
+    for (const k of ['place', 'drop', 'armUpper', 'armLower', 'requestTube', 'stow']) out[k] = !!out[k];
     if (o.drive === 'tank') {
       // Tank robots cannot strafe: keyboard A/D do nothing (one-time hint via out.noStrafe). Turning is J/L (or the R stick); the L stick X still steers on a pad.
       const padX = pad ? pv('right') - pv('left') : 0;

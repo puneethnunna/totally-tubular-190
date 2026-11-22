@@ -14,11 +14,12 @@ const smooth = (u) => u * u * (3 - 2 * u);
 
 // Tunables
 const TUNE = {
-  reach: 0.6, liftSpeed: 2.2, placeBase: 0.15, // reach from bumper face; lift travel adds place time placeAngle: (35 * Math.PI) / 180, placeLateral: 0.3,
+  // reach is measured from the bumper face; lift travel adds place time
+  reach: 0.6, liftSpeed: 2.2, placeBase: 0.15, placeAngle: (35 * Math.PI) / 180, placeLateral: 0.3,
   launchAngle: (20 * Math.PI) / 180, launchMin: 1.5, launchMax: 5, throwDist: 4,
   intakeNear: 0.3, intakeFar: 1.1, intakeHalf: 0.55, intakeHalfWide: 0.8,
   feedCooldown: 1.5, manualCooldown: 0.8, chuteSpeed: 2.4, chuteTime: 0.6, feedClear: 1.0,
-  releaseAt: 0.7, climbTouch: 0.2, climbAngle: (60 * Math.PI) / 180,
+  releaseAt: 0.7, doubleExtra: 0.5, climbTouch: 0.2, climbAngle: (60 * Math.PI) / 180,
 };
 
 // Physics constants (SI). Robots: mass/yaw inertia, traction circle, DC-motor curve; tubes: light + bouncy.
@@ -262,7 +263,12 @@ export function createSim(options = {}) {
     const p = findPost(r, tier);
     if (!p) return emit({ type: 'invalid', robotId: r.id, text: 'no post in range' });
     if (p.tubes.length >= POINTS.maxPhysicalPerPost) return emit({ type: 'invalid', robotId: r.id, postId: p.id, text: 'post full' });
-    r.action = { type: 'place', t: 0, duration: placeDuration(r, p), target: p.id };
+    const normal = placeDuration(r, p);
+    // Two tubes in hand and room for both on this post (it holds <= 1): hang both, one after the other, for +DOUBLE_EXTRA s.
+    const double = r.held.length >= 2 && p.tubes.length <= 1 && p.tubes.length + 2 <= POINTS.maxPhysicalPerPost;
+    r.action = { type: 'place', t: 0, duration: double ? normal + TUNE.doubleExtra : normal, target: p.id };
+    if (double) Object.assign(r.action, { double: true, normal, rel: 0, t1: TUNE.releaseAt * normal });
+    if (double) r.action.t2 = Math.max(r.action.t1 + 0.3, r.action.duration - 0.15);
     r.armTier = tier; k.released = false;
   }
 
@@ -442,6 +448,20 @@ export function createSim(options = {}) {
         k.platform = q; r.y = q.height; r.support = q.level; r.action = null; k.act = null;
         emit({ type: 'climb', robotId: r.id, text: `L${q.level}` });
       }
+      return;
+    }
+    if (a.double) { // two tubes: first goes on at the usual point, the second near the end
+      const t = a.t;
+      r.arm = t < a.t1 ? t / a.t1 : t < a.t2 ? 1 - 0.15 * Math.sin(Math.PI * (t - a.t1) / (a.t2 - a.t1)) : Math.max(0, 1 - 0.8 * (t - a.t2) / Math.max(1e-6, a.duration - a.t2));
+      const due = [a.t1, a.t2];
+      while (a.rel < 2 && t >= due[a.rel]) {
+        a.rel++;
+        const p = postById.get(a.target), id = r.held[0];
+        if (id === undefined || p.tubes.length >= POINTS.maxPhysicalPerPost) { r.action = null; return; }
+        const tb = tubeById.get(id); release(tb); stackOn(tb, p, r.id);
+      }
+      k.released = a.rel >= 2;
+      if (u >= 1) r.action = null;
       return;
     }
     r.arm = u < TUNE.releaseAt ? u / TUNE.releaseAt : 1 - (u - TUNE.releaseAt) / (1 - TUNE.releaseAt);

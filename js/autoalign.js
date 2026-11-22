@@ -4,7 +4,7 @@
 // so every acceleration / traction / bumper limit still comes from the sim.
 //
 //   const aa = createAutoAlign();
-//   aa.start(sim, robotId, tierMode)  -> { ok, reason }      tierMode: 'auto' | 'upper' | 'lower'
+//   aa.start(sim, robotId, tierMode)  -> { ok, reason }      tierMode: 'upper' | 'lower' ('auto' still accepted = upper if the robot can)
 //   aa.step(sim, dt, manualInput?)    -> Input | null         null = not active (finished / cancelled / manual override)
 //   aa.cancel(reason?)                aa.active  aa.target  aa.progress  aa.phase  aa.result
 import { SIDES, POINTS, inRect } from './config.js';
@@ -19,7 +19,6 @@ export const AA = {
   stuckTime: 1.5,      // s of "commanding motion but not moving" before picking another post / aborting
   cancelThreshold: 0.2, // manual stick / key magnitude that overrides auto-align
   retries: 2,          // sim rejected the edge (e.g. lost frame) -> try again this many times
-  partialBonus: 0.5,   // seconds of "travel time" credit per tube already on a post (finish partially filled posts first)
 };
 export const ZONE_MSG = 'Auto-align only works in your scoring zone';
 
@@ -44,22 +43,16 @@ export function launchPose(r, p, tune) {
   return { x, z, heading: Math.atan2(p.z - z, p.tipX - x), inRange: d >= lo && d <= hi, dist: d };
 }
 
-function estTime(r, pose, tank) {
-  const pr = r.preset, d = Math.hypot(pose.x - r.x, pose.z - r.z), turn = Math.abs(wrap(pose.heading - r.heading));
-  return tank ? d / (0.6 * pr.maxSpeed) + turn / (0.6 * pr.turnRate) + 0.8 : Math.max(d / (0.65 * pr.maxSpeed) + 0.4, turn / (0.6 * pr.turnRate));
-}
-
-// Choose the post: has room (< 3 scored), not blocked by another robot, reachable in time. Partially filled posts get a bonus, then nearest.
+// Choose the post: own alliance, requested tier, has room (< 3 scored), not blocked by another robot -- the NEAREST by straight-line distance
+// from the robot to the alignment pose (no fill-level preference).
 export function pickTarget(sim, r, mode, exclude = new Set()) {
-  const tank = r.preset.drive === 'tank', tiers = mode === 'launch' ? ['upper', 'lower'] : [mode];
+  const tiers = mode === 'launch' ? ['upper', 'lower'] : [mode];
   let best = null, bc = Infinity;
   for (const p of sim.state.posts) {
     if (p.alliance !== r.alliance || !tiers.includes(p.tier) || exclude.has(p.id) || p.tubes.length >= POINTS.maxScoringPerPost) continue;
     const pose = mode === 'launch' ? launchPose(r, p, sim.tune) : placePose(r, p, sim.tune);
     if (sim.state.robots.some((o) => o !== r && Math.hypot(o.x - pose.x, o.z - pose.z) < (o.radius || 0.5) + (r.radius || 0.5) * 0.9)) continue; // someone parked on the spot
-    const t = estTime(r, pose, tank);
-    if (t > AA.timeout * 0.9) continue;
-    const cost = t - AA.partialBonus * p.tubes.length + (mode === 'launch' && p.tier === 'lower' ? 3 : 0);
+    const cost = Math.hypot(pose.x - r.x, pose.z - r.z) + (mode === 'launch' && p.tier === 'lower' ? 3 : 0);
     if (cost < bc) { bc = cost; best = { post: p, pose }; }
   }
   return best;

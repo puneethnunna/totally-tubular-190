@@ -1,6 +1,6 @@
 // Boot + game loop glue. `?stubs=1` loads test/stubs/* instead of js/* (or `?stubs=sim,ai` for specific modules).
 import { SIDES, opponent } from './config.js';
-import { createInput, planPlace, nextTier, tierLabel } from './input.js';
+import { createInput, planPlace, armTier } from './input.js';
 import { createUI, loadSettings, saveSettings, ensureMeshes } from './ui.js';
 import { createAutoAlign, ZONE_MSG } from './autoalign.js';
 
@@ -79,7 +79,7 @@ async function startGame(cfg) {
   }
   const match = M.match.createMatch(sim);
   input.setPlayers(p.length); input.setEnabled(true);
-  game = { sim, match, p, bots, state: 'countdown', cdEnd: performance.now() + 3400, acc: 0, phase: 'pre', cam: settings.camera, slot: 0, tier: 'auto', tier2: 'auto', stow: {}, carry: {}, strafeHint: false, cap: settings.speeds[2] / 100, cfg };
+  game = { sim, match, p, bots, state: 'countdown', cdEnd: performance.now() + 3400, acc: 0, phase: 'pre', cam: settings.camera, slot: 0, armed: [null, null], stow: {}, carry: {}, strafeHint: false, cap: settings.speeds[2] / 100, cfg };
   document.body.classList.add('playing');
   ui.show('none', false); ui.showHUD(true, p[0].def);
   bdOn = false; ui.showBreakdown(false); ui.showStats(!!settings.showStats);
@@ -94,8 +94,8 @@ function quit(to = 'title') {
 
 const robotOf = (id) => game?.sim.state.robots.find((r) => r.id === id);
 const autoInfo = () => { const a = game.p[0].auto; return a.active ? { label: a.target?.label || '', progress: a.progress, phase: a.phase } : null; };
-const hud = () => ({ match: game.match, score, me: robotOf(game.p[0].id), auto: autoInfo(), camera: game.cam, tier: game.tier, cap: game.cap, device: input.lastDevice(), stats: statsInfo() });
-const EDGES = ['scoreLower', 'scoreUpper', 'scoreFloor', 'launch', 'place', 'drop', 'stow', 'tierToggle', 'requestTube'];
+const hud = () => ({ match: game.match, score, me: robotOf(game.p[0].id), auto: autoInfo(), camera: game.cam, armed: game.armed[0], cap: game.cap, device: input.lastDevice(), stats: statsInfo() });
+const EDGES = ['scoreLower', 'scoreUpper', 'scoreFloor', 'launch', 'place', 'drop', 'stow', 'armUpper', 'armLower', 'requestTube'];
 const ACT_EDGES = ['scoreLower', 'scoreUpper', 'scoreFloor', 'launch'];
 const PHASE_MSG = { auto: 'AUTO — go!', teleop: 'TELEOP', endgame: 'ENDGAME — climb!', post: 'Match over' };
 let fps = 60;
@@ -149,8 +149,11 @@ function frame(t) {
     for (const q of game.p) {
       const r = robotOf(q.id), pr = q.def.preset;
       const i = input.poll(q.alliance, q.pi, { cameraMode: game.cam, heading: r?.heading, drive: pr.drive, fieldRelative: settings.fieldRelative, cap: game.cap });
-      const tk = q.pi === 0 ? 'tier' : 'tier2';
-      if (i.tierToggle) { game[tk] = nextTier(game[tk], !!pr.canUpper); ui.toast(`Post tier: ${tierLabel(game[tk])}`, { tag: 'Z', alliance: q.alliance }); }
+      const ai = q.pi === 1 ? 1 : 0;
+      for (const [edge, tier, tag] of [['armUpper', 'upper', 'UPPER'], ['armLower', 'lower', 'LOWER']]) if (i[edge]) {
+        game.armed[ai] = armTier(game.armed[ai], tier);
+        ui.toast(game.armed[ai] ? `Armed: ${tag} — score to place` : 'Tier cleared — score drops on the floor', { tag: tag[0], alliance: q.alliance });
+      }
       if (i.requestTube && match.phase !== 'auto') { if (sim.requestHumanTube?.(q.alliance) === false) ui.toast('Human player not available', { alliance: q.alliance }); }
       if (i.drop) i.scoreFloor = true;
       if (i.noStrafe && !game.strafeHint) { game.strafeHint = true; ui.toast('Tank drive cannot strafe — turn with J / L', { tag: '!', alliance: q.alliance }); }
@@ -158,14 +161,17 @@ function frame(t) {
       let justStarted = false;
       if (aa.active && (!r || !live)) aa.cancel('');
       if (i.place && r) {
+        const armed = game.armed[ai];
         if (aa.active) { aa.cancel(); ui.toast('Auto-align cancelled', { tag: '!', alliance: q.alliance }); }
-        else if (settings.autoAlign !== false) {
-          const res = aa.start(sim, q.id, game[tk]);
-          if (res.ok) { justStarted = true; ui.toast(`Auto-align → ${res.target}`, { tag: '⌖', alliance: q.alliance }); }
+        else if (!armed) { // nothing armed: floor drop in place (no auto-align)
+          if (r.held.length) { i.scoreFloor = true; game.armed[ai] = null; } else ui.toast('No tube held', { tag: '!', alliance: q.alliance });
+        } else if (settings.autoAlign !== false) {
+          const res = aa.start(sim, q.id, armed);
+          if (res.ok) { justStarted = true; game.armed[ai] = null; ui.toast(`Auto-align → ${res.target}`, { tag: '⌖', alliance: q.alliance }); }
           else ui.toast(res.reason, { tag: '!', alliance: q.alliance });
         } else {
-          const plan = planPlace({ robot: r, preset: pr, mode: game[tk], posts: SIDES[q.alliance].posts, tune: sim.tune });
-          if (plan.act) i[plan.act] = true; else ui.toast(plan.why, { tag: '!', alliance: q.alliance });
+          const plan = planPlace({ robot: r, preset: pr, armed, posts: SIDES[q.alliance].posts, tune: sim.tune });
+          if (plan.act) { i[plan.act] = true; game.armed[ai] = null; } else ui.toast(plan.why, { tag: '!', alliance: q.alliance });
         }
       }
       if (aa.active && !i.place) {

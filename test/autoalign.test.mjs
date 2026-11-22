@@ -59,13 +59,26 @@ for (const alliance of ['blue', 'red']) {
     }
   });
 }
-t('prefers a partially filled post and skips full ones', () => {
-  const sim = setup('stacker', 'blue', 6.0, -0.5, Math.PI);
-  const ups = sim.state.posts.filter((p) => p.alliance === 'blue' && p.tier === 'upper');
-  for (let i = 0; i < 3; i++) ups[2].tubes.push('x' + i); // 3 scored: full for scoring
-  ups[5].tubes.push('y');
-  const aa = createAutoAlign(); aa.start(sim, 'me', 'auto');
-  assert.equal(aa.target.id, ups[5].id);
+t('snaps to the NEAREST eligible post of the tier (ignores fill level), skips full ones', () => {
+  for (const z of [-2.8, -0.5, 0.8]) {
+    const sim = setup('stacker', 'blue', 6.0, z, Math.PI);
+    const ups = sim.state.posts.filter((p) => p.alliance === 'blue' && p.tier === 'upper');
+    const near = (list) => list.reduce((a, p) => (Math.hypot(p.tipX - 0.5 - 6.0, p.z - z) < Math.hypot(a.tipX - 0.5 - 6.0, a.z - z) ? p : a));
+    const nearest = near(ups); assert.ok(createAutoAlign().start(sim, 'me', 'upper').ok);
+    const aa = createAutoAlign(); aa.start(sim, 'me', 'upper'); assert.equal(aa.target.id, nearest.id, `z=${z}`);
+    for (let i = 0; i < 3; i++) nearest.tubes.push('x' + i); // now full -> next nearest
+    const aa2 = createAutoAlign(); aa2.start(sim, 'me', 'upper'); assert.equal(aa2.target.id, near(ups.filter((p) => p !== nearest)).id);
+    nearest.tubes.length = 0; ups.filter((p) => p !== nearest)[0].tubes.push('y'); // a partly filled far post gets no bonus
+    const aa3 = createAutoAlign(); aa3.start(sim, 'me', 'upper'); assert.equal(aa3.target.id, nearest.id);
+  }
+});
+t('auto-align with two tubes held double-places onto the nearest empty post', () => {
+  const sim = createSim({ robots: [{ id: 'me', alliance: 'blue', slot: 0, preset: 'stacker', start: { x: 6.0, z: -0.5, heading: Math.PI }, preload: true }], midfield: { blue: 4, red: 0 }, autoHumanPlayer: false }), r = sim.robotById('me');
+  const sim2tube = (s) => { const q = s.state.tubes.find((u) => u.state === 'floor'); q.state = 'held'; q.holder = 'me'; return q; };
+  const x = sim2tube(sim); r.held.push(x.id);
+  const aa = createAutoAlign(); assert.ok(aa.start(sim, 'me', 'upper').ok); const id = aa.target.id;
+  const { result } = run(sim, aa, 9); assert.ok(result.ok, result.reason);
+  assert.equal(sim.state.posts.find((p) => p.id === id).tubes.length, 2); assert.equal(r.held.length, 0);
 });
 t('refuses outside the scoring zone / without a tube / unsupported tier', () => {
   const sim = setup('stacker', 'blue', 0, 0, 0), aa = createAutoAlign();
