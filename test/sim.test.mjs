@@ -370,7 +370,7 @@ for (let i = 0; i < 125 * 120; i++) {
   if (i % 6 === 0) for (const p1 of sim.state.robots) for (const p2 of sim.state.robots) if (p1.id < p2.id && !p1.action?.type?.startsWith('cl') && !p2.action?.type?.startsWith('cl') && Math.abs(p1.y - p2.y) < 0.3) assert.ok(robGap(p1, p2) >= -0.002, 'fuzz bumpers overlap ' + robGap(p1, p2));
   for (const q of sim.state.tubes) {
     for (const v of [q.x, q.y, q.z, q.vx, q.vy, q.vz]) assert.ok(Number.isFinite(v), 'NaN tube');
-    assert.ok(Math.abs(q.x) <= FIELD.halfL + 1e-6 && Math.abs(q.z) <= FIELD.halfW + 1e-6, 'tube in field ' + q.state + ' ' + q.x.toFixed(3) + ',' + q.z.toFixed(3) + ' ' + q.id);
+    if (!(q.emerge > 0)) assert.ok(Math.abs(q.x) <= FIELD.halfL + 1e-6 && Math.abs(q.z) <= FIELD.halfW + 1e-6, 'tube in field ' + q.state + ' ' + q.x.toFixed(3) + ',' + q.z.toFixed(3) + ' ' + q.id);
   }
   for (const pp of sim.state.posts) assert.ok(pp.tubes.length <= POINTS.maxPhysicalPerPost);
 }

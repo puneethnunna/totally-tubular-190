@@ -415,7 +415,7 @@ export function createSim(options = {}) {
     const half = r.preset.id === 'sweeper' ? TUNE.intakeHalfWide : TUNE.intakeHalf, dr = k.hx - ROBOT.radius; // front face vs the 0.5 m reference
     let best = null, bd = 1e9;
     for (const t of tubes) {
-      if ((t.state !== 'floor' && t.state !== 'chute') || t.lockT > 0) continue;
+      if ((t.state !== 'floor' && t.state !== 'chute') || t.lockT > 0 || t.emerge > 0) continue;
       const dx = t.x - r.x, dz = t.z - r.z, f = dx * c + dz * s, l = -dx * s + dz * c;
       if (f < TUNE.intakeNear + dr || f > TUNE.intakeFar + dr || Math.abs(l) > half) continue;
       const d = f + Math.abs(l);
@@ -728,6 +728,9 @@ export function createSim(options = {}) {
           }
         }
         t.moving = true;
+      } else if (t.state === 'chute' && t.emerge > 0) {
+        // Still sliding out of the chute opening (outside the field boundary): no gravity, walls or contacts yet.
+        t.emerge -= dt; t.x += t.vx * dt; t.z += t.vz * dt; t.moving = true;
       } else if (t.state === 'floor' || t.state === 'chute') {
         t.x += t.vx * dt; t.z += t.vz * dt;
         if (t.state === 'chute') {
@@ -833,7 +836,8 @@ export function createSim(options = {}) {
   }
   function feed(h, cd) {
     const p = chuteSpawn(h);
-    const t = newTube(h.alliance, p.x, p.z, 'chute');
+    const back = 0.55, t = newTube(h.alliance, p.x - h.c.dirX * back, p.z - h.c.dirZ * back, 'chute');   // starts inside the chute
+    t.emerge = back / TUNE.chuteSpeed;                                                                // ...and slides out through the opening
     t.vx = h.c.dirX * TUNE.chuteSpeed; t.vz = h.c.dirZ * TUNE.chuteSpeed; t.chuteT = TUNE.chuteTime; t.spin = (rnd() - 0.5) * 1.5;
     t.y = Math.max(TUNE.chuteExitY, TUBE.outerRadius + 0.05); t.vy = 0.2; t.tilt = 1;   // leaves the chute upright
     reserve[h.alliance]--; h.cd = cd;
