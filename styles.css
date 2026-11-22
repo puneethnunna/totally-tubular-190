@@ -278,3 +278,12 @@ body.nogui .bl,body.nogui .br{display:none}
 .aa svg{transform:rotate(-90deg)}.aa .trk,.aa .arc{fill:none;stroke-width:3}.aa .trk{stroke:#2e3340}.aa .arc{stroke:var(--gold);stroke-linecap:round;stroke-dasharray:0 100;transition:stroke-dasharray .12s linear}
 .aa .line{height:3px;background:#2a2a2a;border-radius:3px;overflow:hidden}.aa .line i{display:block;height:100%;width:0;background:var(--gold);transition:width .12s linear}
 body.nogui .aa{display:none}
+.tierchip{position:absolute;left:50%;bottom:62px;transform:translateX(-50%);padding:3px 12px;border-radius:999px;background:rgba(10,12,18,.82);border:1px solid #555;color:#aaa;font-weight:800;font-size:11px;letter-spacing:.1em;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.tierchip.upper,.tierchip.lower{border-color:var(--gold);color:var(--gold)}
+body.nogui .tierchip{display:none}
+
+/* team badge (top-right of every menu screen) */
+.team{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--ink-2);font-size:12px;line-height:1.2}
+.team img{width:40px;height:40px;border-radius:50%;object-fit:cover;box-shadow:0 0 0 1px var(--line-strong)}
+.team b{display:block;color:var(--ink);font-family:var(--hf);font-weight:800;font-stretch:75%;font-size:15px;letter-spacing:.04em}
+@media (max-width:560px){.team span{display:none}}

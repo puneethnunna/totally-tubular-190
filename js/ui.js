@@ -50,7 +50,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
 const hint = (...p) => `<div class="foot">${p.map(([k, t]) => `<span><span class="kbd">${k}</span>${t}</span>`).join('')}</div>`;
 const pad2 = (n) => String(n).padStart(2, '0');
-const topbar = (crumb) => `<div class="top"><div class="wm"><i class="tico"></i>TOTALLY TUBULAR</div>${crumb ? `<span class="crumb">${crumb}</span>` : ''}</div>`;
+const topbar = (crumb) => `<div class="top"><div class="wm"><i class="tico"></i>TOTALLY TUBULAR</div>${crumb ? `<span class="crumb">${crumb}</span>` : ''}<div class="team"><img src="assets/frc190-logo.jpg" alt="FRC Team 190 logo"><span><b>FRC 190</b>Gompei and the H.E.R.D.</span></div></div>`;
 const CRUMB = '2026 Totally Tubular';
 const CAMNAME = { driver: 'Driver station', third: 'Third person', first: 'First person' };
 
@@ -169,7 +169,7 @@ export function createUI(app) {
 
   // ---------- home ----------
   const homeEl = mkScreen('home', `${topbar(CRUMB)}
-    <div class="hl"><div class="eyebrow">2026 season</div><h1 class="htitle">Totally<br>Tubular</h1><ul class="hmenu"></ul>
+    <div class="hl"><div class="eyebrow">2026 season · Team 190</div><h1 class="htitle">Totally<br>Tubular</h1><ul class="hmenu"></ul>
       <div class="namecard"><i class="av"></i><label>Driver name<input class="dn" maxlength="24" placeholder="Driver"></label></div></div>
     <div class="hr"><div class="pvbox"></div><button class="car l">‹</button><button class="car r">›</button>
       <div class="hinfo"><div class="bn hf"></div><div><strong></strong><small></small></div><div class="pager"><div class="pb"><i></i></div><span class="pn1"></span></div></div></div>
@@ -555,7 +555,7 @@ export function createUI(app) {
       const sp = [0, 1, 2].map((i) => rowSlider(`Speed ${i + 1} (key ${i + 1})`, 10, 100, 5, () => st.speeds[i], (v) => { st.speeds[i] = v; save(); }));
       const mid = rowSlider('Midfield tubes per alliance', 0, 8, 1, () => st.midfield, (v) => { st.midfield = v; save(); }, (v) => v);
       const hp = rowTog('Human player auto-feed', OO, () => st.autoHP, (v) => { st.autoHP = v; save(); });
-      const aal = rowTog('Auto-align (Place inside your scoring zone)', OO, () => st.autoAlign !== false, (v) => { st.autoAlign = v; save(); });
+      const aal = rowTog('Auto-align (Score inside your scoring zone)', OO, () => st.autoAlign !== false, (v) => { st.autoAlign = v; save(); });
       rows = [r1, vol, ...sp, aal, mid, hp];
       nodes = [group('Driver', [r1]), group('Sound', [vol]), group('Controls', [...sp, aal]), group('Match', [mid, hp])];
     } else if (t === 'display') {
@@ -597,6 +597,7 @@ export function createUI(app) {
   $hud.innerHTML = `<div class="sbw"><div class="sb"><div class="sbox red" id="rs">0</div><div class="sclk"><div class="t" id="clk">2:05</div><div class="ph" id="ph">READY</div></div><div class="sbox blue" id="bs">0</div></div></div>
     <div class="bl"><div class="tubes"><div class="tube"></div><div class="tube"></div></div><div class="pn" id="pn"></div><div class="pl" id="pl"></div><div class="prog"><i id="pg"></i></div></div>
     <div class="aa" id="aa" hidden><div class="chip"><svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="9" class="trk"/><circle cx="12" cy="12" r="9" class="arc" id="aaring" pathLength="100"/></svg><b>AUTO-ALIGN</b><span id="aat"></span></div><div class="line"><i id="aal"></i></div></div>
+    <div class="tierchip floor" id="tierchip">FLOOR</div>
     <div class="br"><div class="hst" id="hst"></div><div class="hints" id="hints"></div></div>
     <div class="stats" id="stats" hidden></div><div class="bd" id="bd" hidden></div>`;
   const $ = (id) => $hud.querySelector('#' + id);
@@ -608,7 +609,7 @@ export function createUI(app) {
     const lab = (id) => (pad ? padLabel(PD[id]) : keyLabel(KB[id][0] || ''));
     const k = (a, b) => (a ? `<span><span class="kbd">${a}</span>${b}</span>` : '');
     const move = pad ? 'L' : ['up', 'left', 'down', 'right'].map(lab).join('');
-    $('hints').innerHTML = [k(move, 'drive'), k(pad ? 'R' : `${lab('rotL')}/${lab('rotR')}`, 'turn'), k(lab('intake'), 'intake'), k(lab('place'), 'place'), k(lab('tier'), 'tier'), k(lab('drop'), 'drop'),
+    $('hints').innerHTML = [k(move, 'drive'), k(pad ? 'R' : `${lab('rotL')}/${lab('rotR')}`, 'turn'), k(lab('intake'), 'intake'), k(lab('upper'), 'arm upper'), k(lab('lower'), 'arm lower'), k(lab('place'), 'score (floor if unarmed)'), k(lab('drop'), 'drop'),
       k(lab('climb'), 'climb'), k(lab('tube'), 'request tube'), k(lab('stow'), 'stow'), k(lab('camera'), 'camera'), k(lab('slot'), 'flip cam'), pad ? '' : k('1-3', 'speed'), k(lab('pause'), 'pause'), k(lab('breakdown'), 'breakdown')].join('');
     $('pn').textContent = `${def.number} ${def.name}`;
   }
@@ -625,7 +626,7 @@ export function createUI(app) {
   }
   let lastHud = {};
   function updateHUD(d) {
-    const { match, score, me, camera, tier, cap } = lastHud = d;
+    const { match, score, me, camera, armed, cap } = lastHud = d;
     if (hintDef && (d.device || 'kb') !== hintDev) setHints(hintDef, d.device || 'kb');
     if (d.stats && !$('stats').hidden) $('stats').textContent = `FPS ${Math.round(d.stats.fps)}  ·  SPEED ${d.stats.speed.toFixed(1)} m/s`;
     const rem = Math.max(0, Math.ceil(match?.remaining ?? 0));
@@ -635,8 +636,9 @@ export function createUI(app) {
     $hud.querySelectorAll('.tube').forEach((t, i) => t.classList.toggle('on', i < (me?.held?.length ?? 0)));
     const aaEl = $('aa'); aaEl.hidden = !d.auto;
     if (d.auto) { const pr = Math.round(100 * (d.auto.progress || 0)); $('aat').textContent = d.auto.label; $('aaring').style.strokeDasharray = `${pr} 100`; $('aal').style.width = pr + '%'; }
+    const tc = $('tierchip'); tc.textContent = tierLabel(armed); tc.className = 'tierchip ' + (armed || 'floor');
     const a = me?.action; $('pg').style.width = a && a.duration ? `${Math.min(100, (100 * a.t) / a.duration)}%` : '0%'; $('pl').textContent = a ? a.type.toUpperCase() : '';
-    $('hst').textContent = `${(CAMNAME[camera] || camera).toUpperCase()}  ·  TIER ${tierLabel(tier)}  ·  SPEED ${Math.round((cap ?? 1) * 100)}%`;
+    $('hst').textContent = `${(CAMNAME[camera] || camera).toUpperCase()}  ·  SPEED ${Math.round((cap ?? 1) * 100)}%`;
   }
 
   // ---------- toasts / countdown ----------

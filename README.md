@@ -2,6 +2,10 @@
 
 **Play it:** https://puneethnunna.github.io/totally-tubular-190/
 
+<img src="assets/frc190-logo.jpg" alt="FRC Team 190 logo" width="120" align="right">
+
+Built by **FRC Team 190, Gompei and the H.E.R.D.** (Mass Academy & WPI).
+
 A browser-based FRC robot simulator for **TOTALLY TUBULAR**, Team 190's mock game for the 2026 off-season. Drive a robot on a field built from our Onshape CAD, pick up tubes, hang them on your alliance's posts, and climb the platforms in the endgame. You can play alone or against CPU robots. There are no accounts and nothing to install.
 
 ## What it's for
@@ -44,9 +48,12 @@ Everything here is our own code, built for our own game. It isn't affiliated wit
 | Drive / strafe | W A S D | Left stick |
 | Turn | J / L | Right stick |
 | Intake | Shift or F | LT |
-| Place (auto-align) | Space or H | RT |
+| Arm UPPER tier | Z | Y |
+| Arm LOWER tier | X | B |
+| Score (auto-align to the armed tier; floor drop if nothing armed) | Space or H | RT |
 | Drop tube | Q | LB |
-| Climb | G | Y |
+| Climb | G | RB |
+| Request human-player tube | T | D-pad down |
 | Change camera | C | L3 |
 | Pause / restart | Esc / R | Back / Start |
 
