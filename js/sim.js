@@ -14,7 +14,7 @@ const smooth = (u) => u * u * (3 - 2 * u);
 
 // Tunables
 const TUNE = {
-  reach: ROBOT.maxExtension + 0.35, placeAngle: (35 * Math.PI) / 180, placeLateral: 0.3,
+  reach: 0.6, liftSpeed: 2.2, placeBase: 0.15, // reach from bumper face; lift travel adds place time placeAngle: (35 * Math.PI) / 180, placeLateral: 0.3,
   launchAngle: (20 * Math.PI) / 180, launchMin: 1.5, launchMax: 5, throwDist: 4,
   intakeNear: 0.3, intakeFar: 1.1, intakeHalf: 0.55, intakeHalfWide: 0.8,
   feedCooldown: 1.5, manualCooldown: 0.8, chuteSpeed: 2.4, chuteTime: 0.6, feedClear: 1.0,
@@ -213,7 +213,7 @@ export function createSim(options = {}) {
     const S = rt.get(r.id).sh, c = Math.cos(r.heading), s = Math.sin(r.heading);
     S.c = c; S.s = s; S.ex = S.ax * Math.abs(c) + S.az * Math.abs(s) + S.m; S.ez = S.ax * Math.abs(s) + S.az * Math.abs(c) + S.m;
   }
-  const postStackPos = (p, idx) => ({ x: p.tipX - p.dirX * TIP_SPACING * idx, y: p.y, z: p.z });
+  const postStackPos = (p, slot) => ({ x: p.tipX - p.dirX * TIP_SPACING * slot, y: p.y, z: p.z }); // slot 0 = at the tip (newest)
   const speed2 = (o) => o.vx * o.vx + o.vz * o.vz;
 
   function release(t) { // remove from holder
@@ -224,10 +224,10 @@ export function createSim(options = {}) {
 
   function stackOn(t, p, holderId) {
     const idx = p.tubes.length;
-    const s = postStackPos(p, idx);
-    Object.assign(t, { state: 'post', post: p.id, stackIndex: idx, x: s.x, y: s.y, z: s.z, vx: 0, vy: 0, vz: 0,
+    Object.assign(t, { state: 'post', post: p.id, stackIndex: idx, vx: 0, vy: 0, vz: 0,
       flight: null, placedInAuto: phase === 'auto' });
     p.tubes.push(t.id);
+    p.tubes.forEach((id, i) => { const o = tubeById.get(id), q = postStackPos(p, p.tubes.length - 1 - i); o.x = q.x; o.y = q.y; o.z = q.z; }); // newest pushes older ones toward the wall
     emit({ type: 'place', robotId: holderId, tubeId: t.id, postId: p.id });
   }
 
@@ -252,6 +252,8 @@ export function createSim(options = {}) {
     return best;
   }
 
+  // Elevator travel: the lift has to rise from stow to the post height, so upper takes ~1.7 s and lower ~0.9 s.
+  const placeDuration = (r, p) => r.preset.placeTime + TUNE.placeBase + Math.max(0, p.y - (r.y || 0) - 0.45) / TUNE.liftSpeed;
   function startPlace(r, tier) {
     const k = rt.get(r.id);
     if (!r.held.length) return emit({ type: 'invalid', robotId: r.id, text: 'no tube held' });
@@ -260,7 +262,7 @@ export function createSim(options = {}) {
     const p = findPost(r, tier);
     if (!p) return emit({ type: 'invalid', robotId: r.id, text: 'no post in range' });
     if (p.tubes.length >= POINTS.maxPhysicalPerPost) return emit({ type: 'invalid', robotId: r.id, postId: p.id, text: 'post full' });
-    r.action = { type: 'place', t: 0, duration: r.preset.placeTime, target: p.id };
+    r.action = { type: 'place', t: 0, duration: placeDuration(r, p), target: p.id };
     r.armTier = tier; k.released = false;
   }
 
@@ -302,7 +304,7 @@ export function createSim(options = {}) {
     const p = r.action.target ? postById.get(r.action.target) : null;
     let tx, ty, tz, T;
     if (p) {
-      const s2 = postStackPos(p, p.tubes.length);
+      const s2 = postStackPos(p, 0);
       tx = s2.x; ty = s2.y; tz = s2.z; T = clamp(Math.hypot(tx - x0, tz - z0) / 6, 0.45, 1.1);
     } else {
       tx = clamp(x0 + c * TUNE.throwDist, -FIELD.halfL + TUBE.outerRadius, FIELD.halfL - TUBE.outerRadius);
