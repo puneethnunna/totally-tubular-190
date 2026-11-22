@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Robot detail</title>
+<style>body{margin:0;background:#0b0d11;color:#eae8e3;font:13px system-ui}canvas{display:block}</style>
+<script type="importmap">{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}</script></head><body>
+<script type="module">
+// Close-up of one robot. Hash: #r=190&az=40&el=30&d=2.2&ty=0.35&intake=0&alliance=blue&tris=1
+import { ROSTER } from '../js/robots.js';
+import { createRobotModel } from '../js/models.js';
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+const q = new URLSearchParams(location.hash.slice(1));
+const W = innerWidth, H = innerHeight;
+const rd = new THREE.WebGLRenderer({ antialias: true }); rd.setSize(W, H);
+rd.toneMapping = THREE.ACESFilmicToneMapping; rd.toneMappingExposure = 1.3; rd.outputColorSpace = THREE.SRGBColorSpace;
+rd.shadowMap.enabled = true; document.body.appendChild(rd.domElement);
+const sc = new THREE.Scene(); sc.background = new THREE.Color(0x2a2d34);
+sc.environment = new THREE.PMREMGenerator(rd).fromScene(new RoomEnvironment(), 0.04).texture;
+sc.add(new THREE.HemisphereLight(0xffffff, 0x3a3d48, 0.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(2.6, 5.5, 3.2); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -2, right: 2, top: 2, bottom: -2, near: 1, far: 14 }); sc.add(sun);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshStandardMaterial({ color: 0x4a4e58, roughness: 1 })); floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; sc.add(floor);
+const cam = new THREE.PerspectiveCamera(32, W / H, 0.05, 40);
+const az = THREE.MathUtils.degToRad(+q.get('az') || 40), el = THREE.MathUtils.degToRad(+(q.get('el') ?? 30)), d = +q.get('d') || 2.2, ty = +(q.get('ty') ?? 0.3);
+cam.position.set(Math.cos(az) * Math.cos(el) * d, ty + Math.sin(el) * d, Math.sin(az) * Math.cos(el) * d); cam.lookAt(0, ty, 0);
+const id = q.get('r') || '190', def = ROSTER.find((r) => r.number === id);
+const rs = { id: 'p', alliance: q.get('alliance') || 'blue', number: id, preset: def.preset, x: 0, y: 0, z: 0, heading: 0, armTier: 'stow', arm: 0, support: 0, held: [], isPlayer: false, intakeOn: q.get('intake') === '1', action: null };
+const m = createRobotModel(rs); sc.add(m.object);
+for (let i = 0; i < 90; i++) m.update(rs, 1 / 60);
+let tris = 0; m.object.traverse((o) => { if (o.isMesh && o.visible) { const g = o.geometry; tris += (g.index ? g.index.count : g.attributes.position.count) / 3; } });
+m.object.traverse((o) => { if (o.isMesh) o.castShadow = o.castShadow; });
+rd.render(sc, cam);
+document.title = 'done tris=' + Math.round(tris); window.TRIS = Math.round(tris);
+</script></body></html>

@@ -105,18 +105,17 @@ export function createSounds() {
   // Real sound files override the synthesized cues when present: assets/sounds/<name>.(mp3|ogg|wav)
   // names: autoStart, autoEnd, teleopStart, endgame, matchEnd, thud, clack, grab. Missing files fall back silently.
   const files = {};
+  let manifest = null;   // assets/sounds/manifest.json maps cue name -> file name; only listed files are fetched (no 404 noise)
   async function loadFile(name) {
     if (name in files) return files[name];
     files[name] = null;
-    for (const ext of ['mp3', 'ogg', 'wav']) {
-      try {
-        const res = await fetch(new URL(`../assets/sounds/${name}.${ext}`, import.meta.url));
-        if (!res.ok) continue;
-        files[name] = await ctx.decodeAudioData(await res.arrayBuffer());
-        return files[name];
-      } catch (e) { /* try next */ }
-    }
-    return null;
+    try {
+      if (!manifest) { const m = await fetch(new URL('../assets/sounds/manifest.json', import.meta.url)); manifest = m.ok ? await m.json() : {}; }
+      const file = manifest[name]; if (!file) return null;
+      const res = await fetch(new URL(`../assets/sounds/${file}`, import.meta.url)); if (!res.ok) return null;
+      files[name] = await ctx.decodeAudioData(await res.arrayBuffer());
+    } catch (e) { /* missing or undecodable: keep the synthesized cue */ }
+    return files[name];
   }
   function playFile(buf, t) { const s = ctx.createBufferSource(), g = ctx.createGain(); s.buffer = buf; g.gain.value = 1.0; s.connect(g); g.connect(master); s.start(t); }
 

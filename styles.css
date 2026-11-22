@@ -232,7 +232,8 @@ td.n,th.n{text-align:right}
 .hints{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;font-size:11px;color:var(--ink-2)}
 .hints span{white-space:nowrap}.hst{font-size:11px;color:var(--gold);margin-bottom:6px;letter-spacing:.04em;font-weight:700}
 body.nogui .bl,body.nogui .br{display:none}
-#toasts{position:fixed;top:68px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:5px;z-index:20;pointer-events:none;width:min(560px,92vw)}
+/* live feedback sits bottom-left, stacked just above the robot / tube panel, so it never covers the field ahead */
+#toasts{position:fixed;left:14px;bottom:var(--toast-bottom,118px);display:flex;flex-direction:column;align-items:flex-start;gap:5px;z-index:20;pointer-events:none;width:min(380px,calc(100vw - 28px))}
 .toast{padding:6px 14px;background:#0b0d11e6;border-left:4px solid var(--gold);border-radius:6px;font-size:13px;animation:ti .2s ease-out;max-width:100%}
 .toast.blue{border-color:var(--blue)}.toast.red{border-color:var(--red)}.toast.foul{background:#3c0c0ce8}
 .toast b{font-family:var(--hf);font-stretch:75%;letter-spacing:.06em;margin-right:6px;color:var(--gold)}

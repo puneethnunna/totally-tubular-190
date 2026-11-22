@@ -733,7 +733,9 @@ export function createUI(app) {
   // ---------- toasts / countdown ----------
   function toast(text, o = {}) {
     const el = h(`<div class="toast ${o.alliance || ''} ${o.foul ? 'foul' : ''}">${o.tag ? `<b>${esc(o.tag)}</b>` : ''}${esc(text)}</div>`);
-    $toasts.appendChild(el); while ($toasts.children.length > 5) $toasts.firstChild.remove();
+    const bl = document.querySelector('#hud .bl');   // stack right above the bottom-left robot / tube panel
+    if (bl && bl.offsetHeight) $toasts.style.setProperty('--toast-bottom', (14 + bl.offsetHeight + 8) + 'px');
+    $toasts.appendChild(el); while ($toasts.children.length > 4) $toasts.firstChild.remove();
     setTimeout(() => el.classList.add('out'), o.ms || 3600); setTimeout(() => el.remove(), (o.ms || 3600) + 450);
   }
   let lastCd = null;

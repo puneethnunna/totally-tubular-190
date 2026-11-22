@@ -12,4 +12,10 @@ Drop audio files here to replace the game's built-in synthesized sounds. Use fil
 | `matchEnd.mp3` | Match ends |
 | `thud.mp3`, `clack.mp3`, `grab.mp3` | Robot bump, tube onto a peg, intake grab (optional) |
 
-`.ogg` and `.wav` also work. Any missing file falls back to the built-in sound.
+`.ogg` and `.wav` also work. Then list each file in `manifest.json`, for example:
+
+```json
+{ "autoStart": "autoStart.mp3", "autoEnd": "autoEnd.mp3", "teleopStart": "teleopStart.mp3", "endgame": "endgame.mp3", "matchEnd": "matchEnd.mp3" }
+```
+
+Anything not listed falls back to the built-in sound.

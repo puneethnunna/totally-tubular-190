@@ -74,6 +74,8 @@ export function getMaterial(name, color, extra) {
 }
 export const MATERIALS = Object.keys(LIB);
 const A = (n) => getMaterial(n);
+const HOLE = () => getMaterial('plastic', 0x07080a);
+const WIRE = (c) => getMaterial('plastic', c, { roughness: 0.55 });
 const CLOTH = { blue: 0x2149c4, red: 0xc41f27 };
 const clothMat = (alliance) => getMaterial('cloth', CLOTH[alliance] ?? CLOTH.blue);
 const accentMat = (hex) => getMaterial('powderCoat', hex);
@@ -108,6 +110,19 @@ function prep(g) {
   c.clearGroups();
   return c;
 }
+const _d = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+const discGeo = (r, axis, sign, seg) => cached(`di${r}|${axis}|${sign}|${seg}`, () => {
+  const g = new THREE.CircleGeometry(r, seg);
+  if (axis === 'x') g.rotateY(sign * Math.PI / 2); else if (axis === 'y') g.rotateX(-sign * Math.PI / 2); else if (sign < 0) g.rotateY(Math.PI);
+  return g;
+});
+const gussetGeo = (size, thick) => cached(`gu${size}|${thick}`, () => {
+  const sh = new THREE.Shape(); sh.moveTo(0, 0); sh.lineTo(size, 0); sh.lineTo(0, size); sh.closePath();
+  const g = new THREE.ExtrudeGeometry(sh, { depth: thick, bevelEnabled: false });
+  g.rotateX(Math.PI / 2);   // shape (x,y)->(x,0,y) after extrude along -y... lay flat: y = -depth..0
+  g.translate(0, thick, 0);
+  return g;
+});
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3(1, 1, 1);
 
 // Collects static parts and merges them into one mesh per material.
@@ -123,6 +138,23 @@ class Batch {
   box(mat, w, h, d, x, y, z, r = 0.004, rx = 0, ry = 0, rz = 0) { return this.geo(mat, rboxGeo(w, h, d, r), x, y, z, rx, ry, rz); }
   cyl(mat, r, len, x, y, z, axis = 'y', seg = 14) { return this.geo(mat, cylGeo(r, len, axis, seg), x, y, z); }
   tire(mat, r, w, x, y, z) { return this.geo(mat, tireGeo(r, w), x, y, z); }
+  // flat circle facing +/- axis, just proud of a surface (lightening holes, labels, bolt heads)
+  disc(mat, r, x, y, z, axis = 'z', sign = 1, seg = 10) { return this.geo(mat, discGeo(r, axis, sign, seg), x, y, z); }
+  // round rod between two points (wires, braces, gussets)
+  rod(mat, ax, ay, az, bx, by, bz, r = 0.003, seg = 6) {
+    _d.set(bx - ax, by - ay, bz - az);
+    const len = _d.length(); if (len < 1e-5) return this;
+    _q.setFromUnitVectors(_up, _d.multiplyScalar(1 / len)); _e.setFromQuaternion(_q);
+    return this.geo(mat, cylGeo(r, +len.toFixed(4), 'y', seg), (ax + bx) / 2, (ay + by) / 2, (az + bz) / 2, _e.x, _e.y, _e.z);
+  }
+  wire(mat, pts, r = 0.003) { for (let i = 1; i < pts.length; i++) this.rod(mat, ...pts[i - 1], ...pts[i], r, 5); return this; }
+  // row of lightening holes along a line on a face
+  holes(mat, r, x, y, z, axis, sign, n, step, along = 'y') {
+    for (let i = 0; i < n; i++) { const o = (i - (n - 1) / 2) * step; this.disc(mat, r, x + (along === 'x' ? o : 0), y + (along === 'y' ? o : 0), z + (along === 'z' ? o : 0), axis, sign); }
+    return this;
+  }
+  // right triangle gusset plate lying flat; right angle at (x,z), legs toward (+x,+z) rotated by quarter turns
+  gusset(mat, size, thick, x, y, z, quarter = 0) { return this.geo(mat, gussetGeo(size, thick), x, y, z, 0, quarter * Math.PI / 2, 0); }
   build(parent, { cast = true, receive = true } = {}) {
     for (const [mat, list] of this.parts) {
       const m = new THREE.Mesh(list.length > 1 ? mergeGeometries(list, false) : list[0], mat);
@@ -242,7 +274,7 @@ const slew = (cur, tgt, dt, k, v) => { const d = (tgt - cur) * (1 - Math.exp(-dt
 
 // cfg: { mastX, zr, tall, n (moving stages), frameM, acc, xA0, yA0 (tube hole center at rest), lazy (hide when idle) }
 function createLift(body, cfg) {
-  const { mastX, zr, tall, n, frameM, acc, xA0, yA0, lazy } = cfg;
+  const { mastX, zr, tall, n, frameM, acc, xA0, yA0, lazy, fancy } = cfg;
   const baseY = 0.1, L = Math.max(tall - 0.1, n >= 3 ? 0.85 : 0.6), armX0 = xA0 - 0.52, restH = yA0 - LIFT.PRONG_DY;
   const root = newGroup(body), mast = newGroup(root);
   const FB = new Batch();
@@ -254,6 +286,24 @@ function createLift(body, cfg) {
   FB.box(frameM, 0.05, 0.04, 2 * zr + 0.06, mastX - 0.012, baseY + L - 0.03, 0, 0.004);
   FB.box(frameM, 0.05, 0.04, 2 * zr + 0.06, mastX - 0.012, baseY + 0.08, 0, 0.004);
   for (const sz of [-1, 1]) FB.box(frameM, 0.18, 0.03, 0.025, mastX + 0.08, baseY + 0.02, sz * (zr - 0.02), 0.004);
+  if (fancy) {
+    const nL = Math.floor((L - 0.1) / 0.052);
+    for (const sz of [-1, 1]) {
+      FB.holes(HOLE(), 0.0095, mastX, baseY + L / 2, sz * (zr + 0.0316), 'z', sz, nL, 0.052);               // lightening holes on the outer rail
+      FB.box(A('plastic'), 0.07, 0.016, 0.07, mastX, baseY + L - 0.008, sz * zr, 0.003);                   // top cap
+    }
+    FB.cyl(A('steelZinc'), 0.01, 2 * zr + 0.12, mastX + 0.01, baseY + 0.115, 0, 'z', 10);                  // sprocket shaft
+    const nar = zr < 0.2, dir = nar ? 1 : -1;
+    for (const sz of [-1, 1]) {                                                                           // gearbox + Kraken-style motor beside each rail
+      const zg = sz * (nar ? zr + 0.058 : zr - 0.058), zm = zg + sz * dir * 0.068;
+      FB.box(A('aluminumAnodized'), 0.07, 0.075, 0.05, mastX, baseY + 0.115, zg, 0.006);
+      FB.cyl(A('motor'), 0.029, 0.075, mastX, baseY + 0.115, zm, 'z', 16);
+      FB.cyl(A('brass'), 0.022, 0.008, mastX, baseY + 0.115, zm + sz * dir * 0.04, 'z', 14);
+      FB.cyl(A('aluminumSatin'), 0.032, 0.008, mastX, baseY + 0.115, zm - sz * dir * 0.036, 'z', 16);
+      FB.cyl(A('steelChain'), 0.026, 0.01, mastX + 0.012, baseY + 0.115, sz * (zr + 0.045), 'z', 16);     // chain sprocket
+    }
+    for (const sz of [-1, 1]) for (const yy of [0.35, 0.7]) if (yy < L - 0.2) FB.box(A('plastic'), 0.07, 0.014, 0.07, mastX, baseY + yy, sz * zr, 0.003);   // rail bearing collars
+  }
   FB.build(mast);
   const stages = [];
   for (let k = 1; k <= n; k++) {
@@ -263,6 +313,13 @@ function createLift(body, cfg) {
       SB.box(A('steelChain'), 0.007, L * 0.85, 0.012, x + w / 2 + 0.004, y0 + L / 2, z, 0.002);
       SB.cyl(A('steelChain'), 0.017, 0.012, x + w / 2 + 0.014, y0 + L + 0.012, z, 'z', 12);       // stage sprocket
     }
+    if (fancy) {
+      const nS = Math.floor((L - 0.16) / 0.048);
+      for (const z of [-zr, zr]) {
+        SB.holes(HOLE(), 0.0085 - 0.0007 * k, x + w / 2 + 0.001, y0 + L / 2, z, 'x', 1, nS, 0.048);
+        for (const yy of [L - 0.025, 0.02]) SB.box(A('plastic'), w + 0.012, 0.028, w + 0.012, x, y0 + yy, z, 0.003);   // bearing blocks
+      }
+    }
     SB.box(mat, w * 0.8, 0.035, 2 * zr + w, x, y0 + L - 0.06, 0, 0.004);
     SB.box(mat, w * 0.8, 0.03, 2 * zr + w, x, y0 + 0.05, 0, 0.004);
     SB.build(g); stages.push(g);
@@ -271,10 +328,26 @@ function createLift(body, cfg) {
   CB.box(acc, 0.03, 0.4, 2 * zr + 0.1, mastX + 0.065, -0.12, 0, 0.005);                              // carriage plate (overlaps the top stage)
   for (const z of [-zr, zr]) for (const y of [-0.25, 0.05]) CB.cyl(A('aluminumSatin'), 0.014, 0.075, mastX + 0.045, y, z, 'z', 10);
   CB.box(A('aluminumSatin'), 0.04, 0.04, 0.66, mastX + 0.09, 0, 0, 0.005);                           // cross-slide rail
+  if (fancy) {
+    const zw = zr + 0.035, nz = Math.floor(zw * 2 / 0.06);
+    for (let r = 0; r < 5; r++) CB.holes(HOLE(), 0.0125, mastX + 0.0658, -0.3 + r * 0.06, 0, 'x', 1, nz, 0.06, 'z');
+    for (const sz of [-1, 1]) {
+      CB.box(acc, 0.045, 0.4, 0.012, mastX + 0.075, -0.12, sz * (zr + 0.05), 0.004);                 // bent flanges
+      CB.box(A('plastic'), 0.034, 0.05, 0.05, mastX + 0.09, 0, sz * 0.335, 0.004);                    // cross-slide end blocks
+      for (const y of [-0.3, 0.05]) CB.box(A('plastic'), 0.05, 0.04, 0.05, mastX + 0.043, y, sz * zr, 0.003);   // bearing blocks on the stage
+    }
+  }
   CB.build(carriage);
   const cart = newGroup(carriage), CT = new Batch();
   CT.box(acc, 0.15, 0.085, 0.13, mastX + 0.09, 0, 0, 0.006);
   CT.box(A('aluminumSatin'), 0.68, 0.052, 0.052, armX0 + 0.34, 0, 0, 0.005);                         // arm stage 1 (fixed to the cart)
+  if (fancy) {
+    CT.cyl(A('motor'), 0.026, 0.07, mastX + 0.09, 0.075, 0, 'y', 16);                                // end-effector gearmotor
+    CT.cyl(A('brass'), 0.019, 0.008, mastX + 0.09, 0.114, 0, 'y', 14);
+    CT.box(A('aluminumAnodized'), 0.07, 0.05, 0.1, mastX + 0.09, 0.045, 0.0, 0.005);
+    CT.holes(HOLE(), 0.012, mastX + 0.166, 0, 0, 'x', 1, 2, 0.04, 'z');
+    CT.disc(HOLE(), 0.012, mastX + 0.165, 0.0, 0, 'x', 1);
+  }
   CT.build(cart);
   const mid = newGroup(cart), MB = new Batch();
   MB.box(A('aluminumBare'), 0.68, 0.042, 0.042, armX0 + 0.34, 0, 0, 0.004);                          // arm stage 2
@@ -283,6 +356,15 @@ function createLift(body, cfg) {
   IB.cyl(A('aluminumBare'), 0.017, 0.64, armX0 + 0.32, 0, 0, 'x', 12);                               // stage 3 = the prong the tubes ride on
   IB.box(acc, 0.022, 0.12, 0.09, xA0 - 0.235, 0, 0, 0.004);                                          // backstop
   IB.cyl(A('aluminumBare'), 0.028, 0.016, xA0 + 0.12, 0, 0, 'x', 12);                                // tip cap
+  if (fancy) {
+    IB.holes(HOLE(), 0.011, xA0 - 0.2235, 0.0, 0, 'x', 1, 3, 0.036);
+    for (const sz of [-1, 1]) {
+      IB.box(A('aluminumAnodized'), 0.2, 0.012, 0.012, xA0 - 0.31, 0.05, sz * 0.045, 0.002);          // guide plates
+      IB.box(A('aluminumAnodized'), 0.2, 0.012, 0.012, xA0 - 0.31, -0.05, sz * 0.045, 0.002);
+      IB.tire(getMaterial('compliantWheel', acc.color.getHex()), 0.02, 0.03, xA0 - 0.25, 0.0, sz * 0.06);
+      IB.cyl(A('aluminumBare'), 0.011, 0.034, xA0 - 0.25, 0.0, sz * 0.06, 'z', 8);
+    }
+  }
   IB.build(inner);
   const carries = [new THREE.Object3D(), new THREE.Object3D()];
   root.add(carries[0], carries[1]);
@@ -446,16 +528,34 @@ function createMeshModel(robot, geo) {
 }
 
 // ---------- procedural robots ----------
-function swerveModule(S, sx, sz, h, frameM) {
-  const x = sx * (h - 0.085), z = sz * (h - 0.078), wr = 0.05;
+// Swerve module (SDS/WCP style): grippy tire on a spoked hub, two vertical side plates with lightening holes, bevel gearbox,
+// Kraken-style drive motor pointing inboard, steer motor + azimuth cap on top, bolts.
+function swerveModule(S, sx, sz, h, frameM, acc) {
+  const x = sx * (h - 0.085), z = sz * (h - 0.078), wr = 0.05, out = sz, inb = -sz;
   S.tire(A('rubber'), wr, 0.034, x, wr, z);
-  S.cyl(A('aluminumBare'), 0.027, 0.04, x, wr, z, 'z', 18);
-  S.cyl(A('plastic'), 0.012, 0.05, x, wr, z, 'z', 10);
-  for (const dz of [-0.024, 0.024]) S.box(frameM, 0.1, 0.1, 0.007, x, 0.075, z + dz, 0.004);
-  S.box(A('aluminumAnodized'), 0.1, 0.035, 0.07, x, 0.13, z, 0.006);
-  S.cyl(A('motor'), 0.02, 0.07, x, 0.135, z - sz * 0.068, 'z', 14);        // drive motor
-  S.cyl(A('motor'), 0.018, 0.06, x - sx * 0.06, 0.135, z, 'y', 14);        // steer motor
-  S.cyl(A('aluminumBare'), 0.012, 0.012, x - sx * 0.06, 0.168, z, 'y', 10);
+  S.cyl(A('aluminumBare'), 0.03, 0.036, x, wr, z, 'z', 18);                                  // hub
+  for (let i = 0; i < 5; i++) {                                                               // hub spoke windows
+    const a = i * Math.PI * 2 / 5 + 0.3;
+    S.disc(HOLE(), 0.0072, x + Math.cos(a) * 0.0185, wr + Math.sin(a) * 0.0185, z + out * 0.0182, 'z', out, 8);
+  }
+  S.cyl(A('plastic'), 0.013, 0.058, x, wr, z, 'z', 10);                                       // axle
+  S.cyl(A('steelZinc'), 0.008, 0.002, x, wr, z + out * 0.0295, 'z', 8);
+  for (const dz of [-0.024, 0.024]) {
+    S.box(frameM, 0.1, 0.07, 0.007, x, 0.108, z + dz, 0.004);                                // module plates (upper half; the wheel shows below)
+    S.cyl(frameM, 0.025, 0.007, x, wr, z + dz, 'z', 14);                                     // bearing boss around the axle
+    S.disc(HOLE(), 0.012, x - sx * 0.026, 0.108, z + dz + Math.sign(dz) * 0.0036, 'z', Math.sign(dz));
+    S.disc(HOLE(), 0.009, x + sx * 0.024, 0.118, z + dz + Math.sign(dz) * 0.0036, 'z', Math.sign(dz));
+  }
+  S.box(A('aluminumAnodized'), 0.1, 0.04, 0.06, x, 0.152, z, 0.006);                          // top block / bevel gearbox
+  S.cyl(A('aluminumBare'), 0.021, 0.014, x, 0.179, z, 'y', 14);                              // azimuth cap
+  S.cyl(acc, 0.012, 0.006, x, 0.188, z, 'y', 10);
+  S.cyl(A('motor'), 0.024, 0.072, x + sx * 0.0, 0.155, z + inb * 0.068, 'z', 16);            // drive motor can
+  S.cyl(A('brass'), 0.018, 0.008, x, 0.155, z + inb * 0.108, 'z', 14);                       // motor end cap
+  S.cyl(A('aluminumSatin'), 0.026, 0.008, x, 0.155, z + inb * 0.03, 'z', 16);               // motor face plate
+  S.cyl(A('motor'), 0.021, 0.07, x - sx * 0.064, 0.158, z, 'y', 16);                         // steer motor can
+  S.cyl(A('brass'), 0.016, 0.008, x - sx * 0.064, 0.197, z, 'y', 12);
+  S.box(A('aluminumAnodized'), 0.05, 0.03, 0.05, x - sx * 0.044, 0.145, z, 0.004);
+  for (const dx of [-0.038, 0.038]) for (const dz of [-0.0285, 0.0285]) S.disc(A('steelZinc'), 0.0035, x + dx, 0.1, z + dz + Math.sign(dz) * 0.0038, 'z', Math.sign(dz), 6);
 }
 function tankDrive(S, h, tread, frameM) {
   for (const sz of [-1, 1]) {
@@ -463,13 +563,82 @@ function tankDrive(S, h, tread, frameM) {
     for (const x of [-0.28, 0, 0.28]) {
       S.tire(getMaterial('compliantWheel', tread), 0.0508, 0.045, x, 0.0508, z);
       S.cyl(A('aluminumBare'), 0.026, 0.05, x, 0.0508, z, 'z', 16);
+      for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; S.disc(HOLE(), 0.0065, x + Math.cos(a) * 0.016, 0.0508 + Math.sin(a) * 0.016, z + sz * 0.0252, 'z', sz, 8); }
       S.cyl(A('plastic'), 0.01, 0.06, x, 0.0508, z, 'z', 10);
     }
     for (const y of [0.0508 + 0.032, 0.0508 - 0.032]) S.box(A('steelChain'), 0.56, 0.007, 0.012, 0, y, z + sz * 0.034, 0.002);
     S.box(frameM, 0.62, 0.05, 0.01, 0, 0.0508, sz * (h - 0.034), 0.003);   // drive rail plate
+    S.holes(HOLE(), 0.012, 0, 0.0508, sz * (h - 0.0285), 'z', sz, 8, 0.07, 'x');
     S.cyl(A('motor'), 0.027, 0.1, -0.2, 0.1, sz * 0.2, 'x', 16);
+    S.cyl(A('brass'), 0.02, 0.008, -0.15, 0.1, sz * 0.2, 'x', 14);
     S.box(A('aluminumAnodized'), 0.09, 0.07, 0.07, -0.3, 0.1, sz * 0.2, 0.006);
+    S.cyl(A('motor'), 0.027, 0.1, -0.2, 0.1, sz * 0.12, 'x', 16);
+    S.cyl(A('brass'), 0.02, 0.008, -0.15, 0.1, sz * 0.12, 'x', 14);
   }
+}
+
+// Chassis details shared by every procedural style: tube rails with lightening holes, gussets, belly pan, electronics board, wiring, guards.
+function chassisDetail(S, s, h, frameM, acc, swerve, wallOpen) {
+  const rw = 0.025, rh = 0.05, dark = A('aluminumAnodized');
+  // lightening holes on rail tops
+  for (const sz of [-1, 1]) S.holes(HOLE(), 0.0075, 0, 0.0905, sz * (h - rw / 2), 'y', 1, 11, 0.066, 'x');
+  for (const sx of [-1, 1]) S.holes(HOLE(), 0.0075, sx * (h - rw / 2), 0.0905, 0, 'y', 1, 11, 0.066, 'z');
+  for (const x of [-0.17, 0.17]) S.holes(HOLE(), 0.006, x, 0.0905, 0, 'y', 1, 9, 0.07, 'z');
+  // gussets at the cross-rail joints
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const q = sz > 0 ? (sx > 0 ? 1 : 2) : (sx > 0 ? 0 : 3);   // legs toward the robot centre-line
+    S.gusset(acc, 0.075, 0.004, sx * 0.17 - sx * 0.0125, 0.0905, sz * (h - rw), q);
+  }
+  // belly pan: black sheet under everything + perimeter bolts
+  S.box(dark, 0.74, 0.004, 0.74, 0, 0.046, 0, 0.001);
+  // deck plate lightening pattern
+  for (let i = -4; i <= 4; i++) for (let j = -4; j <= 4; j++) {
+    const x = i * 0.074, z = j * 0.074;
+    if (Math.abs(x) < 0.31 && Math.abs(z) < 0.31 && !(x > -0.01 && x < 0.3 && z > -0.28 && z < 0.29)) S.disc(HOLE(), 0.017, x, 0.0945, z, 'y', 1, 12);
+  }
+  // electronics board (polycarb panel carries battery, main breaker, PDH, roboRIO, radio, CAN wiring)
+  S.box(getMaterial('plastic', 0x3b3f47), 0.37, 0.006, 0.55, 0.14, 0.121, 0.0, 0.002);                          // light board
+  const batX = 0.1, batZ = 0.24;
+  S.box(getMaterial('plastic', 0x15171a), 0.18, 0.075, 0.075, batX, 0.1595, batZ, 0.006);   // battery (raised on the board)
+  S.box(getMaterial('plastic', 0x2a2d33), 0.12, 0.003, 0.077, batX, 0.1995, batZ, 0.001);   // top label
+  S.disc(getMaterial('plastic', 0xe9e9e4), 0.02, batX + 0.02, 0.2008, batZ, 'y', 1, 12);
+  S.box(A('plastic'), 0.012, 0.012, 0.085, batX + 0.0, 0.205, batZ, 0.002);                 // velcro strap
+  S.box(getMaterial('plastic', 0xc41f27), 0.025, 0.02, 0.02, batX - 0.1, 0.17, batZ + 0.02, 0.003);     // Anderson
+  S.box(getMaterial('plastic', 0x1c1d20), 0.025, 0.02, 0.02, batX - 0.1, 0.17, batZ - 0.02, 0.003);
+  S.box(getMaterial('plastic', 0xd02b2b), 0.04, 0.04, 0.045, 0.2, 0.15, 0.15, 0.004);        // main breaker
+  S.box(getMaterial('plastic', 0xa81d22), 0.1, 0.03, 0.06, 0.18, 0.1425, -0.1, 0.004);       // PDH
+  for (let i = 0; i < 8; i++) S.box(getMaterial('plastic', i % 2 ? 0x1a1a1a : 0xe6e6e0), 0.006, 0.006, 0.004, 0.14 + i * 0.012, 0.162, -0.073, 0.0005);
+  S.box(getMaterial('plastic', 0x131416), 0.14, 0.03, 0.09, 0.07, 0.1425, -0.17, 0.004);      // roboRIO
+  S.box(getMaterial('plastic', 0xe9e9e4), 0.07, 0.002, 0.04, 0.07, 0.1585, -0.17, 0.0005);   // RIO label
+  S.box(getMaterial('plastic', 0x2b66c4), 0.05, 0.03, 0.06, 0.23, 0.1425, -0.2, 0.004);       // radio
+  S.box(getMaterial('plastic', 0x1c1d20), 0.03, 0.03, 0.045, 0.2, 0.1425, 0.06, 0.004);       // voltage regulator
+  S.box(getMaterial('plastic', 0x1c1d20), 0.035, 0.02, 0.035, 0.14, 0.1385, 0.04, 0.003);     // pigeon / IMU
+  for (const [x, z] of [[0.04, 0.0], [0.04, 0.08], [0.28, 0.0], [0.28, -0.1]]) S.box(getMaterial('plastic', 0x1c1d20), 0.04, 0.025, 0.04, x, 0.1385, z, 0.004);   // motor controllers
+  for (const [x, z] of [[0.22, -0.2], [0, -0.2], [0.22, 0.08], [0, 0.08]]) S.cyl(A('aluminumSatin'), 0.006, 0.03, x, 0.108, z, 'y', 8);
+  // wiring: 12 AWG red/black from the battery to the breaker and PDH, CAN yellow/green, motor leads to the modules
+  S.wire(WIRE(0xc41f27), [[batX - 0.1, 0.17, batZ + 0.02], [batX - 0.14, 0.13, batZ - 0.03], [0.18, 0.13, 0.15], [0.19, 0.16, -0.06]], 0.0035);
+  S.wire(WIRE(0x111111), [[batX - 0.1, 0.17, batZ - 0.02], [batX - 0.16, 0.125, batZ - 0.1], [0.14, 0.125, -0.02], [0.16, 0.16, -0.075]], 0.0035);
+  S.wire(WIRE(0xe9c423), [[0.07, 0.158, -0.13], [0.07, 0.13, -0.05], [0.18, 0.12, 0.04], [0.22, 0.13, 0.15]], 0.0025);
+  S.wire(WIRE(0x2c9a4a), [[0.075, 0.158, -0.13], [0.09, 0.12, -0.04], [0.19, 0.115, 0.045]], 0.0025);
+  if (swerve) for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const mx = sx * (h - 0.085), mz = sz * (h - 0.078) + (-sz) * 0.108;
+    const px = sx > 0 ? 0.25 : -0.05, pz = sz * 0.1;
+    S.wire(WIRE(0xe9c423), [[mx, 0.155, mz], [mx - sx * 0.04, 0.115, mz + sz * 0.03], [px + (sx > 0 ? 0.0 : -0.05), 0.112, pz * 1.5], [px * 0.5 + 0.05, 0.13, -0.1 * sz]], 0.0028);
+    S.wire(WIRE(0x2c9a4a), [[mx - sx * 0.064, 0.2, sz * (h - 0.078)], [mx - sx * 0.07, 0.14, sz * (h - 0.11)], [px, 0.115, pz]], 0.0022);
+  }
+  // perimeter guards: aluminum posts + top tube + smoked polycarb panel (front left open for the intake / arm)
+  const gy0 = 0.1, gy1 = 0.3, gz = h - 0.006;
+  for (const sz of [-1, 1]) {
+    S.box(A('polycarbSmoked'), wallOpen[0], gy1 - gy0 - 0.02, 0.004, wallOpen[1], (gy0 + gy1) / 2, sz * gz, 0.001);
+    S.box(frameM, wallOpen[0] + 0.02, 0.018, 0.018, wallOpen[1], gy1, sz * gz, 0.003);
+    for (const px of [wallOpen[1] - wallOpen[0] / 2, wallOpen[1] + wallOpen[0] / 2]) S.box(frameM, 0.018, gy1 - gy0 + 0.02, 0.018, px, (gy0 + gy1) / 2, sz * gz, 0.003);
+    S.box(frameM, wallOpen[0], 0.012, 0.012, wallOpen[1], gy0 + 0.1, sz * gz, 0.002);
+    for (const x of [-0.28, -0.2, -0.12]) S.disc(A('steelZinc'), 0.004, x, gy1, sz * (gz + 0.0095), 'z', sz, 6);
+  }
+  S.box(A('polycarbSmoked'), 0.004, gy1 - gy0 - 0.02, 0.62, -h + 0.006, (gy0 + gy1) / 2, 0, 0.001);   // rear panel
+  S.box(frameM, 0.018, 0.018, 0.78, -h + 0.006, gy1, 0, 0.003);
+  for (const sz of [-1, 1]) S.box(frameM, 0.018, gy1 - gy0 + 0.02, 0.018, -h + 0.006, (gy0 + gy1) / 2, sz * 0.38, 0.003);
+  S.box(acc, 0.006, 0.075, 0.3, -h + 0.002, 0.22, 0, 0.001);                                        // accent plate on the rear guard
 }
 
 export function createRobotModel(robot) {
@@ -496,16 +665,9 @@ export function createRobotModel(robot) {
   for (const sx of [-1, 1]) S.box(frameM, rw, rh, s - 2 * rw - 0.002, sx * (h - rw / 2), 0.065, 0, 0.005);
   for (const x of [-0.17, 0.17]) S.box(frameM, rw, rh * 0.8, s - 2 * rw - 0.002, x, 0.065, 0, 0.004);
   S.box(A('aluminumSatin'), 0.7, 0.005, 0.7, 0, 0.092, 0, 0.002);                          // deck plate
-  // electronics: battery, PDH, rio on a polycarb panel
-  S.box(A('polycarbClear'), 0.34, 0.004, 0.3, 0.12, 0.125, -0.05, 0.001);
-  S.box(A('plastic'), 0.18, 0.075, 0.075, 0.1, 0.133, 0.24, 0.006);                        // battery
-  S.box(A('plastic'), 0.06, 0.012, 0.08, 0.1, 0.17, 0.24, 0.003);      // battery strap/label
-  S.box(getMaterial('plastic', 0x8c1a1f), 0.1, 0.03, 0.06, 0.18, 0.145, -0.1, 0.004);      // PDH
-  S.box(A('plastic'), 0.14, 0.03, 0.09, 0.07, 0.145, -0.14, 0.004);    // roboRIO
-  S.box(A('plastic'), 0.05, 0.04, 0.05, 0.2, 0.15, 0.06, 0.004);       // radio / VRM
-  for (const [x, z] of [[0.22, -0.2], [0, -0.2], [0.22, 0.08], [0, 0.08]]) S.cyl(A('aluminumSatin'), 0.006, 0.03, x, 0.108, z, 'y', 8);
+  chassisDetail(S, s, h, frameM, acc, !tank, id === 'sweeper' ? [0.34, -0.23] : [0.5, -0.15]);
   if (tank) tankDrive(S, h, pm.tread ?? 0x3f8f52, frameM);
-  else for (const sx of [-1, 1]) for (const sz of [-1, 1]) swerveModule(S, sx, sz, h, frameM);
+  else for (const sx of [-1, 1]) for (const sz of [-1, 1]) swerveModule(S, sx, sz, h, frameM, acc);
 
   // ---- lift: multi-stage elevator + telescoping claw arm (S.build below merges the static chassis) ----
   const tall = pm.mastHeight || (id === 'climber' ? 1.3 : id === 'stacker' ? 1.0 : 0.85);
@@ -513,7 +675,7 @@ export function createRobotModel(robot) {
   const wide = !canUpper && id !== 'climber';
   const zr = wide ? 0.3 : 0.13, mastX = wide ? -0.3 : -0.34;
   const lowStow = id === 'sweeper' || id === 'tosser';
-  const lift = createLift(body, { mastX, zr, tall, n: canUpper ? 3 : 2, frameM, acc, xA0: lowStow ? 0.47 : 0.30, yA0: lowStow ? 0.62 : 0.55, lazy: false });
+  const lift = createLift(body, { mastX, zr, tall, n: canUpper ? 3 : 2, frameM, acc, xA0: lowStow ? 0.47 : 0.30, yA0: lowStow ? 0.62 : 0.55, lazy: false, fancy: true });
   const carries = lift.carries;
   const tallB = lift.top;
 
@@ -531,6 +693,13 @@ export function createRobotModel(robot) {
       S.box(acc, 0.12, 0.1, 0.03, h - 0.24, 0.2, sz * 0.5, 0.005);
     }
     S.box(acc, 0.04, 0.16, 0.9, h - 0.25, 0.32, 0, 0.006);
+    S.holes(HOLE(), 0.017, h - 0.3 + 0.0508, 0.26, 0, 'x', 1, 12, 0.075, 'z');
+    S.holes(HOLE(), 0.012, h - 0.3 + 0.0508, 0.2, 0, 'x', 1, 12, 0.075, 'z');
+    for (const sz of [-1, 1]) {
+      S.cyl(A('motor'), 0.032, 0.1, h - 0.42, 0.24, sz * 0.3, 'x', 16);
+      S.cyl(A('brass'), 0.024, 0.008, h - 0.47, 0.24, sz * 0.3, 'x', 14);
+      S.box(A('aluminumAnodized'), 0.06, 0.07, 0.07, h - 0.34, 0.24, sz * 0.3, 0.005);
+    }
   }
   if (id === 'tosser') {
     const sh = newGroup(body, -0.1, 0.9, 0); sh.rotation.z = Math.PI / 6; // sits above the claw arm's travel (arm rides ~0.45-0.6 m)
@@ -544,6 +713,12 @@ export function createRobotModel(robot) {
       HB.cyl(A('plastic'), 0.03, 0.08, 0.38, 0.12, sz * 0.24, 'z', 16);
     }
     HB.box(A('aluminumSatin'), 0.72, 0.012, 0.36, 0, 0.17, 0, 0.003);
+    for (let i = 0; i < 8; i++) for (const zz of [-0.1, 0, 0.1]) HB.disc(HOLE(), 0.012, -0.3 + i * 0.085, 0.1765, zz, 'y', 1, 10);
+    for (const sz of [-1, 1]) for (const dx of [0.2, 0.38]) {
+      HB.cyl(A('motor'), 0.032, 0.1, dx, 0.12, sz * 0.3, 'z', 16);
+      HB.cyl(A('brass'), 0.024, 0.008, dx, 0.12, sz * 0.355, 'z', 14);
+      HB.box(A('aluminumAnodized'), 0.08, 0.08, 0.04, dx, 0.12, sz * 0.245, 0.005);
+    }
     HB.box(A('aluminumSatin'), 0.2, 0.2, 0.36, -0.28, 0, 0, 0.006);
     HB.box(acc, 0.04, 0.12, 0.34, -0.14, 0.02, 0, 0.005);
     HB.cyl(A('plastic'), 0.012, 0.36, 0.2, 0.12, 0, 'z', 10);
@@ -563,6 +738,7 @@ export function createRobotModel(robot) {
     const HB = new Batch();
     for (const z of [-0.375, 0.375]) {
       HB.box(A('aluminumBare'), 0.045, 0.3, 0.045, 0, 0.15, z, 0.005);
+      HB.holes(HOLE(), 0.01, 0.0235, 0.15, z, 'x', 1, 5, 0.052);
       HB.geo(A('steelZinc'), new THREE.TorusGeometry(0.1, 0.022, 10, 20, Math.PI), 0.1, 0.3, z);
       HB.box(acc, 0.06, 0.05, 0.065, 0, 0.02, z, 0.005);
       HB.cyl(A('steelZinc'), 0.022, 0.05, 0.2, 0.3, z, 'z', 10);
@@ -573,6 +749,11 @@ export function createRobotModel(robot) {
     S.cyl(A('plastic'), 0.04, 0.3, -0.2, 0.14, 0, 'z', 18);
     S.cyl(acc, 0.055, 0.02, -0.2, 0.14, 0.17, 'z', 18);
     S.cyl(acc, 0.055, 0.02, -0.2, 0.14, -0.17, 'z', 18);
+    for (const sz of [-1, 1]) {
+      S.box(A('aluminumAnodized'), 0.1, 0.09, 0.07, -0.2, 0.14, sz * 0.23, 0.006);
+      S.cyl(A('motor'), 0.034, 0.1, -0.2, 0.14, sz * 0.31, 'z', 16);
+      S.cyl(A('brass'), 0.026, 0.008, -0.2, 0.14, sz * 0.365, 'z', 14);
+    }
   }
   if (id === 'stacker') {
     S.box(A('aluminumAnodized'), 0.2, 0.1, 0.3, -0.1, 0.17, 0, 0.008);      // elevator gearbox
