@@ -17,6 +17,7 @@ function play(mode, diff = 'hard', verbose = false) {
   const bots = robots.map((r) => createBot(r.id, r.alliance, diff));
   match.start();
   const dt = 1 / 120; let n = 0, frame = {};
+  const stuck = Object.fromEntries(robots.map((r) => [r.id, { cur: 0, max: 0 }]));
   const t0 = Date.now();
   while (match.phase !== 'done' && n++ < 200 * 120) {
     const inputs = {};
@@ -25,7 +26,9 @@ function play(mode, diff = 'hard', verbose = false) {
     sim.step(dt, inputs, match.phase);
     match.fouls.onEvents(sim.drainEvents());
     match.update(dt);
-    for (const r of sim.state.robots) {
+    for (const [i, r] of sim.state.robots.entries()) {
+      const sk = stuck[r.id], bs = bots[robots.findIndex((x) => x.id === r.id)].state; // commanding motion but barely moving, not placing/climbing
+      if (['auto', 'teleop', 'endgame'].includes(match.phase) && bs && bs.lastCmd > 0.3 && Math.hypot(r.vx, r.vz) < 0.2 && !r.action && !r.support) sk.max = Math.max(sk.max, (sk.cur += dt)); else sk.cur = 0;
       assert.ok(Number.isFinite(r.x + r.z + r.heading + r.vx + r.vz + r.omega), 'finite robot');
       assert.ok(Math.abs(r.x) <= FIELD.halfL && Math.abs(r.z) <= FIELD.halfW, 'robot in field');
     }
@@ -33,14 +36,18 @@ function play(mode, diff = 'hard', verbose = false) {
       sim.state.robots.map((r) => `${r.id}:${r.held.length}/${r.support}/${bots[robots.findIndex((x) => x.id === r.id)].state?.mode ?? ''}`).join(' '));
   }
   assert.equal(match.phase, 'done', 'match completes');
-  return { f: match.final, match, ms: Date.now() - t0, n };
+  return { f: match.final, match, stuck: Object.fromEntries(Object.entries(stuck).map(([k, v]) => [k, +v.max.toFixed(1)])), ms: Date.now() - t0, n };
 }
 
+const nb2 = (m) => MODES[m][0];
 const arg = process.argv[2] || 'all', diff = process.argv[3] || 'hard';
 for (const mode of arg === 'all' ? Object.keys(MODES) : [arg]) {
-  const { f, match, ms, n } = play(mode, diff, arg !== "all");
+  const { f, match, ms, n, stuck } = play(mode, diff, arg !== "all");
   for (const a of ['blue', 'red']) console.log(mode, a, JSON.stringify({ auto: f[a].auto, teleop: f[a].teleop, plat: f[a].platform.levels, fouls: f[a].fouls, total: f[a].total, full: f[a].fullPosts, rp: f[a].rp.total }));
   console.log(mode, 'winner', f.winner, 'fouls', match.fouls.list.length, match.fouls.list.slice(0, 6).map((x) => x.rule + ':' + x.robotId).join(' '), `${ms} ms (${(ms / n).toFixed(3)} ms/step)`);
+  const mx = Math.max(...Object.values(stuck));
+  console.log(mode, 'max stuck (s)', JSON.stringify(stuck));
+  if (nb2(mode) >= 2) assert.ok(mx < 5, `${mode}: a robot was stuck ${mx}s`);
   assert.ok(f.blue.total > 0, `${mode}: blue scored`);
   if (MODES[mode][1]) assert.ok(f.red.total > 0, `${mode}: red scored`);
 }
