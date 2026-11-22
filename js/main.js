@@ -3,6 +3,8 @@ import { SIDES, opponent, inRect } from './config.js';
 import { createInput, planPlace } from './input.js';
 import { createUI, loadSettings, saveSettings, ensureMeshes } from './ui.js';
 import { createAutoAlign, ZONE_MSG } from './autoalign.js';
+import { createAutoPath } from './autopath.js'; // AUTOPATH hook
+import { createSounds } from './sounds.js';
 
 const STEP = 1 / 120;
 const stubQ = new URLSearchParams(location.search).get('stubs') || '';
@@ -16,6 +18,10 @@ await Promise.all(NAMES.map(async (n) => {
 const canvas = document.getElementById('game');
 const settings = loadSettings();
 const input = createInput();
+const sounds = createSounds();
+const syncVolume = () => sounds.setVolume(settings.muted ? 0 : (settings.volume ?? 70) / 100);
+syncVolume();
+for (const ev of ['pointerdown', 'keydown', 'touchstart', 'gamepadconnected']) window.addEventListener(ev, () => sounds.unlock(), { once: false, passive: true });
 input.configure(settings);
 let renderer = null, game = null, lastCfg = null, paused = false, lastT = performance.now(), hudT = 0, score = null, scoreT = 0;
 const CAMS = ['driver', 'third', 'first'];
@@ -84,6 +90,12 @@ async function startGame(cfg) {
   ui.show('none', false); ui.showHUD(true, p[0].def);
   bdOn = false; ui.showBreakdown(false); ui.showStats(!!settings.showStats);
   renderer.resize?.(); setCam(game.cam); score = null;
+  // AUTOPATH hook: in AUTO human robots are driven by the drawn path (or a CPU bot when there is none); manual input is ignored.
+  game.autoCtl = {};
+  for (const q of p) {
+    if (q.pi === 0 && cfg.autoPath?.length > 1) game.autoCtl[q.id] = createAutoPath(cfg.autoPath, q.id);
+    else { const b = M.ai.createBot(q.id, q.alliance, cfg.difficulty); game.autoCtl[q.id] = { step: (s, d) => b.think(s, game.match, d) }; }
+  }
   ui.updateHUD(hud());
 }
 
@@ -96,8 +108,10 @@ const robotOf = (id) => game?.sim.state.robots.find((r) => r.id === id);
 const autoInfo = () => { const a = game.p[0].auto; return a.active ? { label: a.target?.label || '', progress: a.progress, phase: a.phase } : null; };
 const hud = () => ({ match: game.match, score, me: robotOf(game.p[0].id), auto: autoInfo(), camera: game.cam, armed: game.armed[0], cap: game.cap, device: input.lastDevice(), stats: statsInfo() });
 const EDGES = ['scoreLower', 'scoreUpper', 'scoreFloor', 'launch', 'place', 'drop', 'stow', 'armUpper', 'armLower', 'requestTube'];
+// phase change -> sound
+const PHASE_SND = { auto: 'autoStart', transition: 'autoEnd', teleop: 'teleopStart', endgame: 'endgame', post: 'matchEnd' };
 const ACT_EDGES = ['scoreLower', 'scoreUpper', 'scoreFloor', 'launch'];
-const PHASE_MSG = { auto: 'AUTO — go!', teleop: 'TELEOP', endgame: 'ENDGAME — climb!', post: 'Match over' };
+const PHASE_MSG = { auto: 'AUTO — go!', transition: 'AUTO over — robots disabled', teleop: 'TELEOP', endgame: 'ENDGAME — climb!', post: 'Match over' };
 let fps = 60;
 const statsInfo = () => { const r = game && robotOf(game.p[0].id); return { fps, speed: r ? Math.hypot(r.vx || 0, r.vz || 0) : 0 }; };
 let bdOn = false;
@@ -148,17 +162,19 @@ function frame(t) {
     const frameIn = {};
     for (const q of game.p) {
       const r = robotOf(q.id), pr = q.def.preset;
-      const i = input.poll(q.alliance, q.pi, { cameraMode: game.cam, heading: r?.heading, drive: pr.drive, fieldRelative: settings.fieldRelative, cap: game.cap });
+      const i0 = input.poll(q.alliance, q.pi, { cameraMode: game.cam, heading: r?.heading, drive: pr.drive, fieldRelative: settings.fieldRelative, cap: game.cap });
+      const i = match.phase === 'auto' ? {} : i0; // AUTOPATH hook: manual input ignored during AUTO
       const ai = q.pi === 1 ? 1 : 0;
       for (const [edge, tier, tag] of [['armUpper', 'upper', 'UPPER'], ['armLower', 'lower', 'LOWER']]) if (i[edge]) {
         if (game.armed[ai] !== tier) ui.toast(`Elevator → ${tag}`, { tag: tag[0], alliance: q.alliance });
         game.armed[ai] = tier;   // sticks until another tier is chosen or the arm is stowed
       }
-      if (i.requestTube && match.phase !== 'auto') { if (sim.requestHumanTube?.(q.alliance) === false) ui.toast('Human player not available', { alliance: q.alliance }); }
+      if (i.requestTube && (match.phase === 'teleop' || match.phase === 'endgame')) { if (sim.requestHumanTube?.(q.alliance) === false) ui.toast('Human player not available', { alliance: q.alliance }); }
       if (i.drop) i.scoreFloor = true;
       if (i.noStrafe && !game.strafeHint) { game.strafeHint = true; ui.toast('Tank drive cannot strafe — turn with J / L', { tag: '!', alliance: q.alliance }); }
       const aa = q.auto, live = ['auto', 'teleop', 'endgame'].includes(match.phase);
       let justStarted = false;
+      if (!live) { for (const k of EDGES) i[k] = false; game.carry[q.id] = null; }   // TRANSITION/pre/post: robots disabled, inputs ignored
       if (aa.active && (!r || !live)) aa.cancel('');
       if (i.place && r) {
         const armed = game.armed[ai];
@@ -198,11 +214,11 @@ function frame(t) {
     while (game.acc >= STEP) {
       const inputs = {}, ph = match.phase, live = ph === 'auto' || ph === 'teleop' || ph === 'endgame';
       if (live) {
-        for (const q of game.p) { const i = { ...frameIn[q.id] }; if (!first) EDGES.forEach((k) => (i[k] = false)); inputs[q.id] = i; }
+        for (const q of game.p) { const i = { ...frameIn[q.id] }; if (!first) EDGES.forEach((k) => (i[k] = false)); inputs[q.id] = ph === 'auto' ? (game.autoCtl[q.id]?.step(sim, STEP) || {}) : i; } // AUTOPATH hook
         for (const id in game.bots) inputs[id] = game.bots[id].think(sim, match, STEP) || {};
       }
       first = false;
-      sim.step(STEP, inputs, ph);
+      sim.step(STEP, inputs, match.simPhase || ph);   // transition is simulated as disabled ('pre')
       match.update(STEP);
       game.acc -= STEP;
     }
@@ -210,7 +226,7 @@ function frame(t) {
     match.fouls?.onEvents?.(ev);
     ev.forEach(eventToast);
     match.fouls?.drainNew?.().forEach(foulToast);
-    if (match.phase !== game.phase) { game.phase = match.phase; if (PHASE_MSG[match.phase]) ui.toast(PHASE_MSG[match.phase], { tag: '●' }); }
+    if (match.phase !== game.phase) { game.phase = match.phase; syncVolume(); if (PHASE_SND[match.phase]) sounds.play(PHASE_SND[match.phase]); if (PHASE_MSG[match.phase]) ui.toast(PHASE_MSG[match.phase], { tag: '●' }); }
     if (match.phase === 'done' && game.state === 'run') {
       game.state = 'over'; input.clear();
       ui.updateHUD(hud());

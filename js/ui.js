@@ -1,6 +1,7 @@
 // Menus, setup flow, HUD, pause, results. Keyboard "layers": ↑↓ move, ←→ adjust, Enter select, Esc back.
 // Optional modules (robots / preview3d / importDialog) are imported dynamically with graceful fallbacks.
 import { SIDES, ROBOT_PRESETS, ROBOT, FIELD, POINTS, TIMING, RP, TUBE, opponent } from './config.js';
+import { flattenStrokes, mirrorStrokes, pathMarkers, stagedSpots, clampToField } from './autopath.js';
 import { ACTIONS, GROUPS, MAX_CHIPS, DEFAULT_PADCFG, keyLabel, padLabel, effectiveKeys, effectivePad, rebindKey, rebindPad, migrateControls, detectBinding, tierLabel } from './input.js';
 
 const opt = (p) => import(p).catch((e) => { console.warn('optional module', p, e.message); return null; });
@@ -9,7 +10,7 @@ const [RBM, PV, IMP] = await Promise.all([opt('./robots.js'), opt('./preview3d.j
 // ---------- settings ----------
 const KEY = 'tt-settings';
 export const DEFAULTS = { quality: 'high', background: true, camera: 'driver', cameraFollow: 'smooth', hideGui: false, fieldRelative: true, autoHP: true, autoAlign: true,
-  driverName: '', volume: 100, speeds: [40, 70, 100], midfield: 8, difficulty: 'normal', mode: '1v1', alliance: 'blue', robotId: '', keys: {}, pad: {}, padCfg: { ...DEFAULT_PADCFG }, ctlVersion: 0, showStats: false };
+  driverName: '', volume: 70, muted: false, speeds: [40, 70, 100], midfield: 8, difficulty: 'normal', mode: '1v1', alliance: 'blue', robotId: '', keys: {}, pad: {}, padCfg: { ...DEFAULT_PADCFG }, ctlVersion: 0, showStats: false, autoPaths: {} };
 export function loadSettings() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
@@ -216,16 +217,19 @@ export function createUI(app) {
   // ---------- setup ----------
   const setupEl = mkScreen('setup', `${topbar(CRUMB)}<h1 class="ttl">Match setup</h1>
     <div class="cols"><div class="left"></div>
-      <div class="rightc"><div class="rh"><span>Starting spot</span><button class="rs">↺ Reset spot</button></div>
+      <div class="rightc"><div class="rh"><div class="segs mtabs"><button class="sg sel" data-t="start">Start position</button><button class="sg" data-t="path">Auto path</button></div>
+          <div class="racts"><button class="rs"><span>↺ Reset spot</span></button><button class="rc" hidden><span>✕ Clear</span></button></div></div>
         <div class="mapw"><canvas id="spot"></canvas></div>
-        <div class="pc">Drag to place it, hold <span class="kbd">J</span> or <span class="kbd">L</span> to turn it. Legal start: inside your SCORING ZONE, outside your LEVEL 1 area (G109).</div></div></div>
+        <div class="pinfo"></div><div class="pc"></div>
+        <div class="legend"><span><i class="ic g"></i>Intake: path passes a staged tube</span><span><i class="ic y"></i>Score: path reaches your posts</span></div></div></div>
     <div class="bar"></div>`);
   const left = setupEl.querySelector('.left'), bar = setupEl.querySelector('.bar'), cv = setupEl.querySelector('#spot'), mapw = setupEl.querySelector('.mapw');
+  const mapTabs = setupEl.querySelector('.mtabs'), mapHelp = setupEl.querySelector('.pc'), pathInfo = setupEl.querySelector('.pinfo'); let setupLayer = null;
   const robotCard = h(`<div class="card rcard"><div class="rinfo"><b></b><div class="nm"></div><small></small></div><button class="btn">Change</button></div>`);
   const pvCard = h('<div class="card pvcard"></div>');
   const lineupBox = h('<div class="card"><span class="lab">Lineup <span style="color:var(--ink-3)">· click a CPU robot to swap</span></span><div class="lineup"></div></div>');
   const rowRobot = { el: robotCard, activate: () => show('picker') };
-  const mirrorStart = () => { const c = clampStart(S.alliance, -S.start.x, -S.start.z); S.start = { ...c, heading: (S.start.heading || 0) + Math.PI }; };
+  const mirrorStart = () => { const old = S.strokes || [], c = clampStart(S.alliance, -S.start.x, -S.start.z); S.start = { ...c, heading: (S.start.heading || 0) + Math.PI }; loadPath(mirrorStrokes(old)); if (S.strokes.length) savePath(); };
   const defaultStart = () => ({ ...SIDES[S.alliance].starts[0] });
   const rowAlli = seg('Alliance', [{ v: 'blue', t: '<i class="dot blue"></i>Blue', c: 'blue' }, { v: 'red', t: '<i class="dot red"></i>Red', c: 'red' }], () => S.alliance,
     (v) => { if (v === S.alliance) return; S.alliance = st.alliance = v; saveSettings(st); mirrorStart(); refresh(true); });
@@ -234,7 +238,11 @@ export function createUI(app) {
   const rowCam = seg('Camera', Object.entries(CAMNAME).map(([v, t]) => ({ v, t })), () => st.camera, (v) => { st.camera = v; save(); });
   const rowDiff = seg('CPU difficulty', ['easy', 'normal', 'hard'].map((v) => ({ v, t: v })), () => S.diff, (v) => { S.diff = st.difficulty = v; saveSettings(st); });
   const rowLine = { el: lineupBox, activate: () => { S.cpuA = []; S.cpuO = []; refresh(); } };
-  const rowReset = { el: setupEl.querySelector('.rs'), activate: () => { S.start = defaultStart(); drawMap(); } };
+  const rowReset = { el: setupEl.querySelector('.rs'), activate: () => { if (S.tab === 'path') { S.strokes.pop(); savePath(); paintTools(); } else { S.start = defaultStart(); loadPath(); } drawMap(); } };
+  const rowClear = { el: setupEl.querySelector('.rc'), activate: () => { S.strokes = []; savePath(); paintTools(); drawMap(); } };
+  const rowTabs = { el: mapTabs, adjust: () => setMapTab(S.tab === 'path' ? 'start' : 'path'), activate: () => setMapTab(S.tab === 'path' ? 'start' : 'path') };
+  mapTabs.querySelectorAll('.sg').forEach((b) => b.addEventListener('click', () => setMapTab(b.dataset.t)));
+  const itemsFor = () => [rowRobot, rowAlli, rowMode, rowCam, rowDiff, rowLine, rowTabs, rowReset, ...(S.tab === 'path' ? [rowClear] : []), bBack, bRules, bSet, bStart];
   const bBack = btn('Back', () => goBack()), bRules = btn('Rules', () => show('rules')), bSet = btn('Settings', () => show('settings')), bStart = btn('Start match', () => startMatch(), 'ac');
   [bBack].forEach((b) => bar.appendChild(b.el)); bar.appendChild(h('<span class="sp"></span>')); [bRules, bSet, bStart].forEach((b) => bar.appendChild(b.el));
   [robotCard, pvCard, rowAlli.el, rowMode.el, rowCam.el, rowDiff.el, lineupBox].forEach((e) => left.appendChild(e));
@@ -275,15 +283,16 @@ export function createUI(app) {
     enter() {
       S.robotId = S.robotId && ALL.some((r) => r.id === S.robotId) ? S.robotId : roster()[0].id;
       if (!S.start) S.start = defaultStart();
+      S.tab = S.tab || 'start'; loadPath();
       spv = makePreview(pvCard); spv.id = null; refresh(true);
-      const items = [rowRobot, rowAlli, rowMode, rowCam, rowDiff, rowLine, rowReset, bBack, bRules, bSet, bStart];
-      pushLayer({ items, i: items.length - 1, back: goBack, onKey: (e) => {
+      const items = itemsFor();
+      setupLayer = pushLayer({ items, i: items.length - 1, back: goBack, onKey: (e) => {
         const k = e.key.toLowerCase();
-        if (k === 'j' || k === 'l') { S.start.heading = (S.start.heading || 0) + (k === 'l' ? 0.15 : -0.15); drawMap(); return true; }
+        if ((k === 'j' || k === 'l') && S.tab === 'start') { S.start.heading = (S.start.heading || 0) + (k === 'l' ? 0.15 : -0.15); drawMap(); return true; }
       } });
-      requestAnimationFrame(drawMap);
+      setMapTab(S.tab); requestAnimationFrame(drawMap);
     },
-    leave() { spv?.dispose(); spv = null; },
+    leave() { spv?.dispose(); spv = null; setupLayer = null; },
   };
   // CPU starts: partners take the default spots farthest from the player's spot; opponents their default spots.
   function assignStarts() {
@@ -293,38 +302,55 @@ export function createUI(app) {
   function startMatch() {
     fillCpu(); const c = counts();
     app.onStart({ mode: S.mode, local: S.mode === 'local', alliance: S.alliance, player: myRobot(), difficulty: S.diff, camera: st.camera,
-      allies: S.cpuA.slice(0, c.ally).map(findRobot), opps: S.cpuO.slice(0, c.opp).map(findRobot), start: { ...S.start }, starts: assignStarts() });
+      allies: S.cpuA.slice(0, c.ally).map(findRobot), opps: S.cpuO.slice(0, c.opp).map(findRobot), start: { ...S.start }, starts: assignStarts(), autoPath: S.strokes.length ? fullPath() : null });
   }
 
-  // 2D start map
+  // 2D map: START POSITION tab (drag the spot) and AUTO PATH tab (sketch the path; icons mark automatic actions)
+  const MM = 18;   // px of margin around the field for zone labels
   const wx = (g, x) => g.ox + (x + FIELD.halfL) * g.s, wz = (g, z) => g.oy + (z + FIELD.halfW) * g.s;
-  const geom = () => { const w = cv.clientWidth, hh = cv.clientHeight, s = Math.min((w - 28) / FIELD.length, (hh - 28) / FIELD.width); return { w, hh, s, ox: (w - s * FIELD.length) / 2, oy: (hh - s * FIELD.width) / 2 }; };
-  let drag = false;
+  const geom = () => { const w = cv.clientWidth, hh = cv.clientHeight, s = Math.max(1, Math.min((w - 2 * MM) / FIELD.length, (hh - 2 * MM) / FIELD.width)); return { w, hh, s, ox: (w - s * FIELD.length) / 2, oy: (hh - s * FIELD.width) / 2 }; };
+  let drag = false, stroking = false;
+  const fullPath = () => [{ x: S.start.x, z: S.start.z }, ...flattenStrokes(S.strokes)];
   function drawMap() {
     if (!S.start || !cv.clientWidth) return;
     const dpr = devicePixelRatio || 1; cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
     const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const g = geom(), R = (r, fill, stroke, w = 1) => { c.beginPath(); c.rect(wx(g, r.x0), wz(g, r.z0), (r.x1 - r.x0) * g.s, (r.z1 - r.z0) * g.s); if (fill) { c.fillStyle = fill; c.fill(); } if (stroke) { c.strokeStyle = stroke; c.lineWidth = w; c.stroke(); } };
+    const g = geom(), s = g.s, pathTab = S.tab === 'path';
+    const R = (r, fill, stroke, w = 1) => { c.beginPath(); c.rect(wx(g, r.x0), wz(g, r.z0), (r.x1 - r.x0) * s, (r.z1 - r.z0) * s); if (fill) { c.fillStyle = fill; c.fill(); } if (stroke) { c.strokeStyle = stroke; c.lineWidth = w; c.stroke(); } };
     R({ x0: -FIELD.halfL, x1: FIELD.halfL, z0: -FIELD.halfW, z1: FIELD.halfW }, '#0d0f13', '#ffffff30');
-    c.beginPath(); c.moveTo(wx(g, 0), wz(g, -FIELD.halfW)); c.lineTo(wx(g, 0), wz(g, FIELD.halfW)); c.strokeStyle = '#ffffff22'; c.stroke();
-    c.font = `600 ${Math.max(9, g.s * 0.2)}px system-ui`; c.textAlign = 'center';
+    c.beginPath(); c.moveTo(wx(g, 0), wz(g, -FIELD.halfW)); c.lineTo(wx(g, 0), wz(g, FIELD.halfW)); c.strokeStyle = '#ffffff22'; c.lineWidth = 1; c.stroke();
+    // zone labels live in the margins around the field so they never overlap field art (short forms when narrow)
+    const fs = Math.max(8, Math.min(11, s * 0.34)), label = (txt, short, xa, xb, top, col) => {
+      c.font = `700 ${fs}px system-ui`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = col;
+      const w = (xb - xa) * s - 4, t = c.measureText(txt).width <= w ? txt : c.measureText(short).width <= w ? short : '';
+      if (t) c.fillText(t, wx(g, (xa + xb) / 2), top ? g.oy - MM / 2 : g.oy + FIELD.width * s + MM / 2);
+    };
+    const stg = stagedSpots(st.midfield ?? 8), usedTubes = new Set();
+    const full = fullPath(), mk = pathTab && full.length > 1 ? pathMarkers(full, S.alliance, st.midfield ?? 8) : { intakes: [], scores: [] };
     for (const a of ['blue', 'red']) {
-      const Sd = SIDES[a], col = a === 'blue' ? '61,132,250' : '241,68,69', mine = a === S.alliance, K = (o) => `rgba(${col},${o})`;
+      const Sd = SIDES[a], col = a === 'blue' ? '61,132,250' : '241,68,69', mine = a === S.alliance, K = (o) => `rgba(${col},${o})`, top = a === 'blue';
       R(Sd.scoringZone, K(mine ? 0.13 : 0.05), K(mine ? 0.6 : 0.35)); R(Sd.loadingZone, K(0.05), K(0.3));
       R(Sd.floorArea, K(0.12), K(0.75), 1.5); R(Sd.platformZone, null, K(0.3)); R(Sd.l1Area, K(0.1), K(0.55));
-      Sd.platforms.forEach((p, i) => R(p, K(0.15 + i * 0.12), K(0.8)));
+      Sd.platforms.forEach((p, i) => { R(p, K(0.15 + i * 0.12), K(0.8)); if (s >= 14) { c.font = `800 ${Math.max(9, s * 0.5)}px system-ui`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = K(0.95); c.fillText(String(p.level), wx(g, (p.x0 + p.x1) / 2), wz(g, (p.z0 + p.z1) / 2)); } });
       R(Sd.shortWall, '#9a9a9a'); Sd.chutes.forEach((u) => { c.fillStyle = '#f0c13e'; c.fillRect(wx(g, u.x) - 2.5, wz(g, u.z) - 2.5, 5, 5); });
-      Sd.posts.filter((p) => p.tier === 'lower').forEach((p) => { c.fillStyle = K(1); c.fillRect(wx(g, p.baseX) - 2, wz(g, p.z) - 2.5, 4, 5); });
-      Sd.stagingRow.forEach((p) => { c.beginPath(); c.arc(wx(g, p.x), wz(g, p.z), g.s * 0.1, 0, 7); c.strokeStyle = '#f0c13e66'; c.stroke(); });
-      c.fillStyle = K(0.85);
-      c.fillText(mine ? 'YOUR SCORING ZONE' : 'SCORING ZONE', wx(g, (Sd.scoringZone.x0 + Sd.scoringZone.x1) / 2), wz(g, Sd.scoringZone.z1) - 6);
-      c.fillText('LEVEL 1 AREA', wx(g, (Sd.floorArea.x0 + Sd.floorArea.x1) / 2), wz(g, Sd.floorArea.z0) + g.s * 0.4);
-      c.fillText('LOADING', wx(g, (Sd.loadingZone.x0 + Sd.loadingZone.x1) / 2), wz(g, Sd.loadingZone.z1) - 6);
-      c.fillText('PLATFORMS', wx(g, (Sd.platformZone.x0 + Sd.platformZone.x1) / 2), wz(g, Sd.platformZone.z1) + g.s * 0.35);
-      c.fillText(`${a.toUpperCase()} DRIVERS`, wx(g, Sd.driverStationX < 0 ? -FIELD.halfL + 1.1 : FIELD.halfL - 1.1), wz(g, 0.1));
+      // posts: each peg runs from the wall to its tip (lower and upper tiers share the same spot from above)
+      c.lineWidth = Math.max(2, s * 0.09); c.strokeStyle = K(1); c.lineCap = 'round';
+      Sd.posts.filter((p) => p.tier === 'lower').forEach((p) => { c.beginPath(); c.moveTo(wx(g, p.baseX), wz(g, p.z)); c.lineTo(wx(g, p.tipX), wz(g, p.z)); c.stroke(); c.beginPath(); c.arc(wx(g, p.tipX), wz(g, p.z), Math.max(2, s * 0.07), 0, 7); c.fillStyle = '#fff'; c.fill(); });
+      c.lineCap = 'butt';
+      // staging-row tube spots (empty slots faint, populated ones solid)
+      Sd.stagingRow.forEach((p) => { c.beginPath(); c.arc(wx(g, p.x), wz(g, p.z), TUBE.outerRadius * s, 0, 7); c.setLineDash([3, 3]); c.strokeStyle = '#f0c13e30'; c.lineWidth = 1; c.stroke(); c.setLineDash([]); });
+      label(mine ? 'YOUR SCORING ZONE' : 'SCORING ZONE', mine ? 'YOUR ZONE' : 'SCORING', Sd.scoringZone.x0, Sd.scoringZone.x1, top, K(0.95));
+      label('LOADING ZONE', 'LOADING', Sd.loadingZone.x0, Sd.loadingZone.x1, top, K(0.7));
+      label('PLATFORMS', 'PLAT.', Sd.platformZone.x0, Sd.platformZone.x1, top, K(0.7));
+    }
+    c.font = `700 ${fs}px system-ui`; c.textBaseline = 'middle'; c.textAlign = 'center';
+    for (const a of ['blue', 'red']) { const x = SIDES[a].driverStationX < 0 ? g.ox - MM / 2 : g.ox + FIELD.length * s + MM / 2; c.save(); c.translate(x, g.hh / 2); c.rotate(SIDES[a].driverStationX < 0 ? -Math.PI / 2 : Math.PI / 2); c.fillStyle = a === 'blue' ? 'rgba(61,132,250,.85)' : 'rgba(241,68,69,.85)'; if (g.oy > 6 || true) c.fillText(`${a.toUpperCase()} DRIVERS`, 0, 0); c.restore(); }
+    for (const t of stg) {
+      const hit = mk.intakes.some((m) => Math.hypot(m.x - t.x, m.z - t.z) < 0.01);
+      c.beginPath(); c.arc(wx(g, t.x), wz(g, t.z), TUBE.outerRadius * s, 0, 7); c.fillStyle = hit ? 'rgba(56,210,122,.28)' : 'rgba(240,193,62,.18)'; c.fill(); c.strokeStyle = hit ? '#38d27a' : '#f0c13e'; c.lineWidth = Math.max(1.5, s * 0.05); c.stroke();
     }
     const sq = (x, z, hd, fill, stroke, lw = 1.5) => {
-      c.save(); c.translate(wx(g, x), wz(g, z)); c.rotate(hd); const r = ROBOT.outer * g.s / 2;
+      c.save(); c.translate(wx(g, x), wz(g, z)); c.rotate(hd); const r = ROBOT.outer * s / 2;
       c.fillStyle = fill; c.strokeStyle = stroke; c.lineWidth = lw; c.fillRect(-r, -r, 2 * r, 2 * r); c.strokeRect(-r, -r, 2 * r, 2 * r);
       c.beginPath(); c.moveTo(r * 0.95, 0); c.lineTo(r * 0.45, -r * 0.35); c.lineTo(r * 0.45, r * 0.35); c.closePath(); c.fillStyle = stroke; c.fill(); c.restore();
     };
@@ -332,14 +358,72 @@ export function createUI(app) {
     st2.ally.forEach((p) => sq(p.x, p.z, p.heading, 'rgba(255,255,255,.04)', 'rgba(255,255,255,.25)', 1));
     st2.opp.forEach((p) => sq(p.x, p.z, p.heading, 'rgba(255,255,255,.04)', 'rgba(255,255,255,.2)', 1));
     sq(S.start.x, S.start.z, S.start.heading || 0, `rgba(${col},.4)`, drag ? '#f0c13e' : '#fff', 2);
+    c.beginPath(); c.arc(wx(g, S.start.x), wz(g, S.start.z), TUBE.outerRadius * s * 0.8, 0, 7); c.strokeStyle = '#f0c13e'; c.lineWidth = Math.max(1.5, s * 0.05); c.stroke(); // preload
+    if (!pathTab) return;
+    // ---- the drawn path: line + direction arrows + action icons
+    if (full.length > 1) {
+      c.lineJoin = 'round'; c.lineCap = 'round';
+      c.beginPath(); full.forEach((p, k) => (k ? c.lineTo(wx(g, p.x), wz(g, p.z)) : c.moveTo(wx(g, p.x), wz(g, p.z)))); c.strokeStyle = 'rgba(0,0,0,.55)'; c.lineWidth = 6; c.stroke();
+      c.strokeStyle = '#f0c13e'; c.lineWidth = 3; c.stroke();
+      let acc = 0; const gap = 1.3, as = Math.max(5, s * 0.2);
+      for (let k = 1; k < full.length; k++) {
+        const a = full[k - 1], b = full[k], L = Math.hypot(b.x - a.x, b.z - a.z); if (L < 1e-6) continue;
+        const ang = Math.atan2(b.z - a.z, b.x - a.x); let d = gap - acc;
+        while (d <= L) { const x = wx(g, a.x + (b.x - a.x) * d / L), y = wz(g, a.z + (b.z - a.z) * d / L); c.save(); c.translate(x, y); c.rotate(ang); c.beginPath(); c.moveTo(as, 0); c.lineTo(-as * 0.7, -as * 0.75); c.lineTo(-as * 0.7, as * 0.75); c.closePath(); c.fillStyle = '#16130a'; c.fill(); c.strokeStyle = '#f0c13e'; c.lineWidth = 1.5; c.stroke(); c.restore(); d += gap; }
+        acc = L - (d - gap);
+      }
+      const e = full[full.length - 1]; c.beginPath(); c.arc(wx(g, e.x), wz(g, e.z), 4.5, 0, 7); c.fillStyle = '#f0c13e'; c.fill();
+    }
+    const badge = (x, z, col2, draw) => {
+      const px = wx(g, x), py = wz(g, z) - Math.max(15, s * 0.7), r = Math.max(8, s * 0.33);
+      c.beginPath(); c.moveTo(px, py + r + 5); c.lineTo(px - 4, py + r - 1); c.lineTo(px + 4, py + r - 1); c.fillStyle = col2; c.fill();
+      c.beginPath(); c.arc(px, py, r, 0, 7); c.fillStyle = col2; c.fill(); c.strokeStyle = '#0b0d11'; c.lineWidth = 2; c.stroke();
+      c.strokeStyle = '#0b0d11'; c.fillStyle = '#0b0d11'; c.lineWidth = Math.max(1.6, r * 0.2); c.lineCap = 'round'; c.lineJoin = 'round'; draw(px, py, r * 0.55);
+    };
+    mk.intakes.forEach((m) => badge(m.x, m.z, '#38d27a', (x, y, q) => { c.beginPath(); c.moveTo(x - q, y - q * 0.2); c.lineTo(x, y + q * 0.8); c.lineTo(x + q, y - q * 0.2); c.moveTo(x - q, y - q); c.lineTo(x, y - q * 0.0 - q * 0.0); c.moveTo(x, y - q * 1.0); c.lineTo(x + q, y - q); c.stroke(); }));
+    mk.scores.forEach((m) => badge(m.x, m.z, '#f0c13e', (x, y, q) => { c.beginPath(); c.moveTo(x - q, y + q * 0.1); c.lineTo(x - q * 0.2, y + q * 0.8); c.lineTo(x + q, y - q * 0.8); c.stroke(); }));
   }
   const mapPos = (e) => { const g = geom(), r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left - g.ox) / g.s - FIELD.halfL, z: (e.clientY - r.top - g.oy) / g.s - FIELD.halfW }; };
   const moveTo = (e) => { const p = mapPos(e), q = clampStart(S.alliance, p.x, p.z); S.start.x = q.x; S.start.z = q.z; drawMap(); };
-  cv.addEventListener('pointerdown', (e) => { drag = true; mapw.classList.add('drag'); cv.setPointerCapture(e.pointerId); moveTo(e); });
-  cv.addEventListener('pointermove', (e) => drag && moveTo(e));
-  const endDrag = () => { drag = false; mapw.classList.remove('drag'); drawMap(); };
+  const addPt = (e, force) => {
+    const p = clampToField(mapPos(e), 0.3), cs = S.strokes[S.strokes.length - 1]; if (!cs) return;
+    const l = cs[cs.length - 1] || flattenStrokes(S.strokes.slice(0, -1)).pop() || S.start;
+    if (force || Math.hypot(p.x - l.x, p.z - l.z) >= 0.12) { cs.push(p); drawMap(); }
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    try { cv.setPointerCapture(e.pointerId); } catch {}
+    if (S.tab === 'path') { stroking = true; mapw.classList.add('drag'); S.strokes.push([]); addPt(e, true); }
+    else { drag = true; mapw.classList.add('drag'); moveTo(e); }
+  });
+  cv.addEventListener('pointermove', (e) => { if (stroking) addPt(e); else if (drag) moveTo(e); });
+  const endDrag = (e) => {
+    if (stroking) { addPt(e, false); S.strokes = S.strokes.filter((s2) => s2.length); savePath(); paintTools(); }
+    if (drag && !stroking) { const k = pathKey(); if (k !== S.pathKey) loadPath(); }
+    drag = stroking = false; mapw.classList.remove('drag'); drawMap();
+  };
   cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
   new ResizeObserver(() => cur === 'setup' && drawMap()).observe(mapw);
+
+  // auto path persistence: per alliance + nearest default start; mirrored when the alliance flips
+  const pathKey = () => { const A = S.alliance, d = (p) => Math.hypot(p.x - S.start.x, p.z - S.start.z); let b = 0; SIDES[A].starts.forEach((p, k) => { if (d(p) < d(SIDES[A].starts[b])) b = k; }); return `${A}:${b}`; };
+  const copyStrokes = (a) => (a || []).map((s2) => s2.map((p) => ({ x: p.x, z: p.z })));
+  function loadPath(fallback) { S.pathKey = pathKey(); S.strokes = copyStrokes(st.autoPaths?.[S.pathKey] || fallback || []); paintTools(); }
+  function savePath() {
+    st.autoPaths = st.autoPaths && typeof st.autoPaths === 'object' ? st.autoPaths : {}; S.pathKey = pathKey();
+    if (S.strokes.length) st.autoPaths[S.pathKey] = copyStrokes(S.strokes); else delete st.autoPaths[S.pathKey];
+    saveSettings(st);
+  }
+  function setMapTab(t) {
+    S.tab = t; setupEl.classList.toggle('tab-path', t === 'path');
+    mapTabs.querySelectorAll('.sg').forEach((b) => b.classList.toggle('sel', b.dataset.t === t));
+    rowReset.el.querySelector('span').textContent = t === 'path' ? '↶ Undo' : '↺ Reset spot'; paintTools();
+    mapHelp.innerHTML = t === 'path'
+      ? 'Drag on the field to draw your AUTO path from your robot; extra strokes join in order. No path = the CPU drives your robot in AUTO.'
+      : 'Drag to place it, hold <span class="kbd">J</span> or <span class="kbd">L</span> to turn it. Legal start: inside your SCORING ZONE, outside your LEVEL 1 area (G109).';
+    if (setupLayer) setItems(setupLayer, itemsFor(), Math.min(setupLayer.i, itemsFor().length - 1));
+    drawMap();
+  }
+  function paintTools() { const n = S.strokes.length; rowClear.el.hidden = S.tab !== 'path'; rowReset.el.classList.toggle('dis', S.tab === 'path' && !n); rowClear.el.classList.toggle('dis', !n); pathInfo.textContent = S.tab === 'path' ? (n ? `${flattenStrokes(S.strokes).length} points · ${n} stroke${n > 1 ? 's' : ''}` : 'No path drawn — CPU drives AUTO') : ''; }
 
   // ---------- choose your robot ----------
   const pickerEl = mkScreen('picker', `${topbar(CRUMB)}<h1 class="ptitle">Choose your robot</h1>
@@ -413,6 +497,7 @@ export function createUI(app) {
   <p>Two alliances score identical tubes on the floor and on two tiers of eight posts, then finish on elevated platforms. ${TUBE.perAlliance} tubes per alliance: staged midfield tubes, one preload per robot, the rest fed by your human player from the loading station. Condensed from the game manual (Draft 0.10).</p>
   <h3>Match phases</h3><table><tr><th>Phase</th><th class="n">Time</th><th>Notes</th></tr>
   <tr><td>AUTO</td><td class="n">${T.auto}s</td><td>No human-player tubes, no entering either LOADING ZONE, tubes score double. No contact with opponents once fully past center.</td></tr>
+  <tr><td>TRANSITION</td><td class="n">${T.transition}s</td><td>Robots are disabled between AUTO and TELEOP; no driving or actions.</td></tr>
   <tr><td>TELEOP</td><td class="n">${T.teleop}s</td><td>Loading permitted. The last ${T.endgame}s are ENDGAME.</td></tr>
   <tr><td>Assessment</td><td class="n">+${T.assessDelay}s</td><td>Platform positions are judged 3 seconds after the buzzer.</td></tr></table>
   <h3>Scoring</h3><table><tr><th>Action</th><th class="n">TELEOP</th><th class="n">AUTO</th></tr>
@@ -552,12 +637,13 @@ export function createUI(app) {
       ni.value = st.driverName; ni.addEventListener('input', () => { st.driverName = ni.value; saveSettings(st); });
       const r1 = { el: nm, activate: () => ni.focus() };
       const vol = rowSlider('Volume', 0, 100, 5, () => st.volume, (v) => { st.volume = v; save(); });
+      const mute = rowTog('Mute sound', OO, () => !!st.muted, (v) => { st.muted = v; save(); });
       const sp = [0, 1, 2].map((i) => rowSlider(`Speed ${i + 1} (key ${i + 1})`, 10, 100, 5, () => st.speeds[i], (v) => { st.speeds[i] = v; save(); }));
       const mid = rowSlider('Midfield tubes per alliance', 0, 8, 1, () => st.midfield, (v) => { st.midfield = v; save(); }, (v) => v);
       const hp = rowTog('Human player auto-feed', OO, () => st.autoHP, (v) => { st.autoHP = v; save(); });
       const aal = rowTog('Auto-align (Score inside your scoring zone)', OO, () => st.autoAlign !== false, (v) => { st.autoAlign = v; save(); });
-      rows = [r1, vol, ...sp, aal, mid, hp];
-      nodes = [group('Driver', [r1]), group('Sound', [vol]), group('Controls', [...sp, aal]), group('Match', [mid, hp])];
+      rows = [r1, vol, mute, ...sp, aal, mid, hp];
+      nodes = [group('Driver', [r1]), group('Sound', [vol, mute]), group('Controls', [...sp, aal]), group('Match', [mid, hp])];
     } else if (t === 'display') {
       const q = rowTog('Graphics', [{ v: 'low', t: 'Low' }, { v: 'high', t: 'High' }], () => st.quality, (v) => { st.quality = v; save(); });
       const bg = rowTog('Background (stands + crowd)', OO, () => st.background, (v) => { st.background = v; save(); });
@@ -601,7 +687,7 @@ export function createUI(app) {
     <div class="br"><div class="hst" id="hst"></div><div class="hints" id="hints"></div></div>
     <div class="stats" id="stats" hidden></div><div class="bd" id="bd" hidden></div>`;
   const $ = (id) => $hud.querySelector('#' + id);
-  const PHL = { pre: 'READY', auto: 'AUTO', teleop: 'TELEOP', endgame: 'ENDGAME', post: 'ASSESSING', done: 'FINAL' };
+  const PHL = { pre: 'READY', auto: 'AUTO', transition: 'TRANSITION', teleop: 'TELEOP', endgame: 'ENDGAME', post: 'ASSESSING', done: 'FINAL' };
   let hintDef = null;
   function setHints(def, dev = 'kb') {
     hintDef = def; hintDev = dev;
@@ -624,13 +710,14 @@ export function createUI(app) {
       <tr><td>Fouls received</td><td class="n b">${g(B, 'fouls', 'points')}</td><td class="n r">${g(R, 'fouls', 'points')}</td></tr>
       <tr class="tot"><td>TOTAL</td><td class="n b">${g(B, 'total')}</td><td class="n r">${g(R, 'total')}</td></tr></table></div>`;
   }
+  // FRC-style field clock: seconds left in the CURRENT period (AUTO 0:20->0:00, TRANSITION 0:00, TELEOP 1:45->0:00)
+  const clockStr = (m) => { const s = Math.max(0, Math.ceil((m?.periodRemaining ?? m?.remaining ?? 0) - 1e-6)); return `${Math.floor(s / 60)}:${pad2(s % 60)}`; };
   let lastHud = {};
   function updateHUD(d) {
     const { match, score, me, camera, armed, cap } = lastHud = d;
     if (hintDef && (d.device || 'kb') !== hintDev) setHints(hintDef, d.device || 'kb');
     if (d.stats && !$('stats').hidden) $('stats').textContent = `FPS ${Math.round(d.stats.fps)}  ·  SPEED ${d.stats.speed.toFixed(1)} m/s`;
-    const rem = Math.max(0, Math.ceil(match?.remaining ?? 0));
-    $('clk').textContent = `${Math.floor(rem / 60)}:${pad2(rem % 60)}`;
+    $('clk').textContent = clockStr(match);
     const ph = $('ph'); ph.textContent = PHL[match?.phase] || ''; ph.classList.toggle('endgame', match?.phase === 'endgame');
     $('rs').textContent = score?.red?.total ?? 0; $('bs').textContent = score?.blue?.total ?? 0;
     $hud.querySelectorAll('.tube').forEach((t, i) => t.classList.toggle('on', i < (me?.held?.length ?? 0)));
@@ -658,12 +745,11 @@ export function createUI(app) {
   function showPause(info = {}) {
     pauseInfo = info;
     const hd = lastHud, A = info.alliance || 'blue', sc = hd.score, you = sc?.[A]?.total ?? 0, them = sc?.[opponent(A)]?.total ?? 0;
-    const rem = Math.max(0, Math.ceil(hd.match?.remaining ?? 0));
     const mk = (t, fn) => ({ el: h(`<div class="mi">${t}</div>`), activate: fn });
     const items = [mk('Resume', () => resume()), mk('Restart', () => { close(); app.onRestart(); }),
       mk('Settings', () => { fromPause = true; show('settings'); }), mk('Back to setup', () => { close(); app.onQuit('setup'); }), mk('Title screen', () => { close(); app.onQuit('title'); })];
     const ov = h(`<div class="ov"><div class="pz"><h2>Paused</h2><div class="who"><i class="dot ${A}"></i>${A[0].toUpperCase() + A.slice(1)} alliance · ${esc(info.label || '')}</div>
-      <div class="mt"><div class="y">You<b>${you}</b></div><div>${PHL[hd.match?.phase] || ''}<b>${Math.floor(rem / 60)}:${pad2(rem % 60)}</b></div><div class="t">Them<b>${them}</b></div></div><div class="pm"></div></div></div>`);
+      <div class="mt"><div class="y">You<b>${you}</b></div><div>${PHL[hd.match?.phase] || ''}<b>${clockStr(hd.match)}</b></div><div class="t">Them<b>${them}</b></div></div><div class="pm"></div></div></div>`);
     items.forEach((i) => ov.querySelector('.pm').appendChild(i.el)); $ov.appendChild(ov);
     const close = () => { ov.remove(); if (top()?.pause) popLayer(); };
     const resume = () => { close(); app.onResume(); };
