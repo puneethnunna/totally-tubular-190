@@ -23,7 +23,8 @@ function play(mode, diff = 'hard', verbose = false) {
     const inputs = {};
     if (n % 2 === 1) { frame = {}; robots.forEach((r, i) => (frame[r.id] = bots[i].think(sim, match, dt * 2))); }
     for (const id in frame) { inputs[id] = { ...frame[id] }; if (n % 2 === 0) for (const k of ['scoreLower', 'scoreUpper', 'scoreFloor', 'launch']) inputs[id][k] = false; }
-    sim.step(dt, inputs, match.phase);
+    if (match.phase === 'transition') for (const id in inputs) inputs[id] = {}; // robots disabled
+    sim.step(dt, inputs, match.simPhase);
     match.fouls.onEvents(sim.drainEvents());
     match.update(dt);
     for (const [i, r] of sim.state.robots.entries()) {

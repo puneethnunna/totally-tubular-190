@@ -119,8 +119,8 @@ test('match phases and results', () => {
   const m = createMatch(sim);
   assert.equal(m.phase, 'pre'); m.start();
   const seen = new Set(); let snap = false;
-  for (let i = 0; i < 128 * 10 + 5; i++) { sim.state.time += 0.1; m.update(0.1); seen.add(m.phase); snap = snap || !!m.autoSnapshot; }
-  assert.deepEqual([...seen], ['auto', 'teleop', 'endgame', 'post', 'done']);
+  for (let i = 0; i < 130 * 10 + 5; i++) { sim.state.time += 0.1; m.update(0.1); seen.add(m.phase); snap = snap || !!m.autoSnapshot; }
+  assert.deepEqual([...seen], ['auto', 'transition', 'teleop', 'endgame', 'post', 'done']);
   assert.ok(snap && m.final && m.final.winner === 'blue' && m.final.blue.total === 6);
 });
 

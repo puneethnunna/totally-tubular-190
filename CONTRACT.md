@@ -111,7 +111,7 @@ Mechanics the sim must implement:
 const match = createMatch(sim);
 match.update(dt)   // advances clock; snapshots AUTO tube scoring at end of AUTO
 match.phase        // 'pre'|'auto'|'teleop'|'endgame'|'post'|'done'
-match.elapsed, match.remaining   // remaining = time left in match (counts down from 125)
+match.elapsed, match.remaining   // remaining = time left in match (counts down from 127)
 match.start(), match.pause(), match.resume()
 match.autoSnapshot // score detail at end of AUTO (from computeScore)
 match.final        // final result object once phase === 'done' (3 s after end)

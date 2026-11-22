@@ -15,10 +15,11 @@ export const FIELD = {
 
 export const TIMING = {
   auto: 20,
+  transition: 2,         // robots disabled between AUTO and TELEOP
   teleop: 105,
   endgame: 30,           // last 30 s of TELEOP
   assessDelay: 3,        // platforms assessed at T+3 s
-  get total() { return this.auto + this.teleop; },
+  get total() { return this.auto + this.transition + this.teleop; },
 };
 
 export const POINTS = {
