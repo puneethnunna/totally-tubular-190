@@ -27,6 +27,11 @@ function play(mode, diff = 'hard', verbose = false) {
     sim.step(dt, inputs, match.simPhase);
     match.fouls.onEvents(sim.drainEvents());
     match.update(dt);
+    for (const t of sim.state.tubes) { // human-player tubes: the ring's lowest edge never goes below the carpet, no upright->flat snaps
+      if (t.state === 'chute') assert.ok(t.y - 0.2155 * Math.sin((t.tilt || 0) * Math.PI / 2) >= 0.0635 - 1e-3, `${mode}: chute tube sank`);
+      if (t.state === 'floor' && t._wasChuteTilt > 0.05) assert.fail(`${mode}: chute tube snapped flat`);
+      t._wasChuteTilt = t.state === 'chute' ? t.tilt || 0 : 0;
+    }
     for (const [i, r] of sim.state.robots.entries()) {
       const sk = stuck[r.id], bs = bots[robots.findIndex((x) => x.id === r.id)].state; // commanding motion but barely moving, not placing/climbing
       if (['auto', 'teleop', 'endgame'].includes(match.phase) && bs && bs.lastCmd > 0.3 && Math.hypot(r.vx, r.vz) < 0.2 && !r.action && !r.support) sk.max = Math.max(sk.max, (sk.cur += dt)); else sk.cur = 0;

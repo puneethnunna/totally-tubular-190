@@ -753,7 +753,8 @@ export function createSim(options = {}) {
           }
           t.tilt = phi / HP;
           grounded = t.y <= Rc * Math.sin(phi) + TR + 1e-4;
-          if ((grounded && phi <= 0 && Math.abs(t.vy) < 0.05) || t.chuteT <= 0) { t.state = 'floor'; t.tilt = 0; t.tiltW = 0; t.vy = 0; t.y = TR; }
+          if (t.chuteT <= 0 && phi > 0) t.tiltW = Math.min(t.tiltW || 0, -1.5);   // overdue: tip it over (never snap)
+          if ((grounded && phi <= 0 && Math.abs(t.vy) < 0.05) || t.chuteT <= -3) { t.state = 'floor'; t.tilt = 0; t.tiltW = 0; t.vy = 0; t.y = TR; }
         } else {
           t.y = TR;
           const sp = Math.hypot(t.vx, t.vz);
@@ -789,11 +790,16 @@ export function createSim(options = {}) {
             if (vn < 0) {
               const j2 = -(1 + (vn < -PHYS.restV ? PHYS.tubeRest : 0)) * vn / 2, vt = (o.vx - a.vx) * -nz + (o.vz - a.vz) * nx;
               a.vx -= nx * j2; a.vz -= nz * j2; o.vx += nx * j2; o.vz += nz * j2; a.spin -= vt; o.spin += vt;
+              for (const u of [a, o]) if (u.state === 'chute' && u.tilt > 0) u.tiltW = Math.min(u.tiltW || 0, -Math.min(4, 2 + Math.abs(j2) * 3)); // knocked over
             }
           }
         }
       }
-      for (const t of act) { tubeRobot(t); tubeWalls(t); }
+      for (const t of act) {
+        const ux = t.vx, uz = t.vz;
+        tubeRobot(t); tubeWalls(t);
+        if (t.state === 'chute' && t.tilt > 0) { const dv = Math.hypot(t.vx - ux, t.vz - uz); if (dv > 0.05) t.tiltW = Math.min(t.tiltW || 0, -Math.min(4, 3 * dv)); } // a bump knocks an upright tube over
+      }
     }
     for (const t of act) {
       const sp = t.vx * t.vx + t.vz * t.vz;
