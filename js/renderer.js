@@ -82,7 +82,7 @@ export function createRenderer(canvas) {
     flat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2),
     tmp: new THREE.Quaternion(), tmp2: new THREE.Quaternion(),
   };
-  const Y = new THREE.Vector3(0, 1, 0), v3 = new THREE.Vector3(), ONE = new THREE.Vector3(1, 1, 1), m4 = new THREE.Matrix4();
+  const Y = new THREE.Vector3(0, 1, 0), v3 = new THREE.Vector3(), ONE = new THREE.Vector3(1, 1, 1), ZERO3 = new THREE.Vector3(1e-4, 1e-4, 1e-4), m4 = new THREE.Matrix4();
 
   function setCameraMode(m, a = alliance, robotId = null, opts = {}) {
     if (m === 'chase') m = 'third';
@@ -263,7 +263,8 @@ export function createRenderer(canvas) {
         rec.q.slerpQuaternions(rec.fq, tgtQ, s);
       } else { rec.p.copy(tgtP); rec.q.copy(tgtQ); rec.dur = 0; }
       rec.holder = tb.state === 'held' ? model : rec.holder;
-      tubes.setMatrixAt(n++, m4.compose(rec.p, rec.q, ONE));
+      const inFace = mode === 'first' && tb.state === 'held' && tb.holder === playerId;   // own held tubes would fill the first-person view
+      tubes.setMatrixAt(n++, m4.compose(rec.p, rec.q, inFace ? ZERO3 : ONE));
     }
     tubes.count = n;
     tubes.instanceMatrix.needsUpdate = true;
