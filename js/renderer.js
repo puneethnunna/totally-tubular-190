@@ -219,7 +219,11 @@ export function createRenderer(canvas) {
   const easeS = (u) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
   const PEG_FINAL = LIFT.FINAL, PEG_GAP = 0.14;   // tube center rests FINAL beyond the tip toward the wall; older tubes are pushed back 0.14 each
 
+  let recState = null;
   function syncTubes(state, dt) {
+    // A new match (or restart) makes a new state whose tube ids start again at t0; records from the old match would make
+    // those tubes ease in from where the old tube with the same id was drawn, flying across the field.
+    if (state !== recState) { recs.clear(); recState = state; }
     let n = 0;
     const t = state.time || 0;
     byRobot.clear();

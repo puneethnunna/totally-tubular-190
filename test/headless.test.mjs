@@ -39,6 +39,8 @@ function play(mode, diff = 'hard', verbose = false) {
       if (['auto', 'teleop', 'endgame'].includes(match.phase) && bs && bs.lastCmd > 0.3 && Math.hypot(r.vx, r.vz) < 0.2 && !r.action && !r.support) sk.max = Math.max(sk.max, (sk.cur += dt)); else sk.cur = 0;
       assert.ok(Number.isFinite(r.x + r.z + r.heading + r.vx + r.vz + r.omega), 'finite robot');
       assert.ok(Math.abs(r.x) <= FIELD.halfL && Math.abs(r.z) <= FIELD.halfW, 'robot in field');
+      if (r._px !== undefined) assert.ok(Math.hypot(r.x - r._px, r.z - r._pz) < 0.1, `${mode}: robot ${r.id} jumped ${Math.hypot(r.x - r._px, r.z - r._pz).toFixed(2)} m at ${sim.state.time.toFixed(2)} (${match.phase}, ${r.action?.type})`);
+      r._px = r.x; r._pz = r.z;
     }
     if (verbose && n % (120 * 25) === 0) console.log(match.phase, Math.round(match.remaining), 'B', match.score.blue.total, 'R', match.score.red.total,
       sim.state.robots.map((r) => `${r.id}:${r.held.length}/${r.support}/${bots[robots.findIndex((x) => x.id === r.id)].state?.mode ?? ''}`).join(' '));

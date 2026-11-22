@@ -147,7 +147,7 @@ export function createSim(options = {}) {
     return { x0: Math.min(ps[0].tipX, ps[0].baseX), x1: Math.max(ps[0].tipX, ps[0].baseX), z0: Math.min(...zs) - 0.05, z1: Math.max(...zs) + 0.05 };
   });
   const platforms = ALLIANCES.flatMap((a) => SIDES[a].platforms.map((p) => ({ ...p, alliance: a, id: `${a}-L${p.level}` })));
-  const platRects = platforms;
+  const platRects = platforms, platSet = new Set(platforms);
   const obstacles = [...walls, ...postRails, ...platRects], obsShapes = obstacles.map(rectShape);
   const solids = [...walls, ...platRects]; // tall enough to stop a tube in flight (postRails: tubes pass under the pegs)
 
@@ -531,14 +531,22 @@ export function createSim(options = {}) {
       if (pen > 1e-3) k.jam = true;
       const p = deepest(sh(r), nx, nz); wallHit(r, nx, nz, pen, p[0], p[1]);
     };
-    if (k.platform) {
+    if (r.action?.type === 'climb') {
+      // the climb path owns the robot (it may roll sideways off its current platform onto the next one)
+    } else if (k.platform) {
       const q = k.platform, open = q.z1 < 0;
-      if (q.x1 - q.x0 <= 2 * S.ex) { r.x = (q.x0 + q.x1) / 2; r.vx = 0; }
+      if (q.x1 - q.x0 <= 2 * S.ex) { const cx = (q.x0 + q.x1) / 2 - r.x; r.x += clamp(cx, -0.02, 0.02); r.vx = 0; } // centered on a narrow platform (eased, never snapped)
       else { plane(1, 0, q.x0 + S.ex - r.x); plane(-1, 0, r.x - (q.x1 - S.ex)); }
       if (open) plane(0, 1, q.z0 + S.ez - r.z); else plane(0, -1, r.z - (q.z1 - S.ez));
-    } else if (r.action?.type !== 'climb') {
-      for (const O of obsShapes) {
-        if (!contact(O, sh(r), _C)) continue;
+    } else {
+      for (let oi = 0; oi < obsShapes.length; oi++) {
+        const O = obsShapes[oi];
+        if (!contact(O, sh(r), _C)) { if (obstacles[oi] === k.leaving) k.leaving = null; continue; }
+        if (obstacles[oi] === k.leaving) continue; // just drove off this platform: drop down past its edge instead of being shoved clear
+        if (r.y > 0.02 && platSet.has(obstacles[oi]) && _C.pen > 0.02) { // dropping onto another platform's footprint: ease off it
+          if (!k.eased) { k.eased = true; wallHit(r, _C.nx, _C.nz, 0.02, _C.px, _C.pz); }
+          continue;
+        }
         m = Math.max(m, _C.pen); if (_C.pen > 1e-3) k.jam = true; wallHit(r, _C.nx, _C.nz, _C.pen, _C.px, _C.pz);
       }
     }
@@ -548,7 +556,7 @@ export function createSim(options = {}) {
   }
 
   // One pass of bumper-vs-bumper: mass-weighted full push-out + inelastic impulse with friction at the real contact point.
-  function pairPass() {
+  function pairPass(it) {
     let m = 0;
     for (let i = 0; i < robots.length; i++) {
       for (let j = i + 1; j < robots.length; j++) {
@@ -557,8 +565,10 @@ export function createSim(options = {}) {
         const aFix = a.action?.type === 'climb', bFix = b.action?.type === 'climb';
         const ia = aFix ? 0 : 1 / a.mass, ib = bFix ? 0 : 1 / b.mass, iia = aFix ? 0 : 1 / a.inertia, iib = bFix ? 0 : 1 / b.inertia;
         if (ia + ib === 0 || !contact(sh(a), sh(b), _C)) continue;
-        const { nx, nz, pen, px, pz } = _C;
-        if (pen > m) m = pen;
+        const { nx, nz, px, pz } = _C;
+        let pen = _C.pen;
+        if (pen > 0.03 && Math.abs(a.y - b.y) > 0.1) { if (it > 0) continue; pen = 0.02; } // deep overlap (one robot dropped onto another): ease apart, never snap
+        else if (pen > m) m = pen;
         if (pen > 1e-3) rt.get(a.id).jam = rt.get(b.id).jam = true;
         const cor = pen / (ia + ib), aax = px - a.x, aaz = pz - a.z, bax = px - b.x, baz = pz - b.z;
         a.x -= nx * cor * ia; a.z -= nz * cor * ia; b.x += nx * cor * ib; b.z += nz * cor * ib;
@@ -579,11 +589,12 @@ export function createSim(options = {}) {
 
   // Iterate pair + world passes until nothing overlaps by more than 0.5 mm; the world pass always runs last so walls win.
   function solveContacts() {
-    for (const r of robots) { const k = rt.get(r.id); if (k.platform && (k.platform.z1 < 0 ? r.z > k.platform.z1 - 0.15 : r.z < k.platform.z0 + 0.15)) k.platform = null; }
+    for (const r of robots) { const k = rt.get(r.id); if (k.platform && (k.platform.z1 < 0 ? r.z > k.platform.z1 - 0.15 : r.z < k.platform.z0 + 0.15)) { k.leaving = k.platform; k.platform = null; } }
+    for (const r of robots) rt.get(r.id).eased = false;
     const solve = () => {
       for (let it = 0; it < 16; it++) {
         for (const r of robots) rt.get(r.id).jam = false;
-        const a = pairPass();
+        const a = pairPass(it);
         let w = 0;
         for (const r of robots) w = Math.max(w, worldPass(r, rt.get(r.id)));
         if (a < 5e-4 && w < 5e-4) return;
